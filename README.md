@@ -1,0 +1,144 @@
+# Subsplash Live Stream Scheduler — OBS Studio Plugin
+
+A native OBS Studio plugin that automatically starts and stops streaming based on
+the broadcast schedule set in the Subsplash Dashboard.
+
+## How It Works
+
+```
+┌───────────────────────┐              ┌──────────────────────────┐
+│   Subsplash Live API  │◄── poll ────│  OBS Plugin               │
+│                       │              │                          │
+│  /tokens/v1/token     │              │  ┌─────────────────────┐ │
+│  /live/v1/broadcasts  │── schedule ─►│  │ Background Thread   │ │
+│                       │              │  │ (scheduler.c)       │ │
+└───────────────────────┘              │  └────────┬────────────┘ │
+                                       │           │ action flag  │
+                                       │  ┌────────▼────────────┐ │
+                                       │  │ Main Thread Timer   │ │
+                                       │  │ streaming_start()   │ │
+                                       │  │ streaming_stop()    │ │
+                                       │  └─────────────────────┘ │
+                                       └──────────────────────────┘
+```
+
+1. A background thread polls the Subsplash Live API for upcoming broadcasts.
+2. When a broadcast's scheduled `start_at` approaches, it signals the main thread.
+3. The main thread calls `obs_frontend_streaming_start()` to begin streaming.
+4. When the broadcast's `end_at` time passes, it calls `obs_frontend_streaming_stop()`.
+
+The user configures their OBS Stream settings (RTMP URL + stream key from their
+Subsplash Live account) separately. This plugin only controls **when** streaming
+starts and stops.
+
+## Prerequisites
+
+- OBS Studio 30.0+
+- A Subsplash Live account
+- A Subsplash API Client (client_id / client_secret)
+- OBS Stream settings configured with your Subsplash RTMP ingest URL and stream key
+
+## Building
+
+This plugin uses the [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate)
+build system. Follow the standard OBS plugin build workflow:
+
+### macOS
+
+```bash
+cmake --preset macos
+cmake --build --preset macos
+```
+
+### Linux
+
+```bash
+cmake --preset linux-x86_64
+cmake --build --preset linux-x86_64
+```
+
+### Windows
+
+```powershell
+cmake --preset windows-x64
+cmake --build --preset windows-x64
+```
+
+See the [OBS Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki)
+for detailed build instructions and prerequisites.
+
+### Dependencies
+
+- **libobs** and **obs-frontend-api** — provided by the OBS SDK
+- **Qt6** (Widgets, Core) — provided by the OBS SDK build system
+- **libcurl** — system library (macOS/Linux) or bundled (Windows)
+
+## Installation
+
+After building, copy the plugin binary to your OBS plugins directory:
+
+- **macOS**: `~/Library/Application Support/obs-studio/plugins/`
+- **Linux**: `~/.config/obs-studio/plugins/`
+- **Windows**: `%APPDATA%\obs-studio\plugins\`
+
+## Usage
+
+1. Launch OBS Studio.
+2. Go to **Tools > Subsplash Live Scheduler**.
+3. Enter your Subsplash API credentials:
+   - **Client ID** and **Client Secret** from your API Client
+   - **App Key** (6-character code for your organization)
+   - **Base URL** (`https://core.subsplash.com` for production,
+     `https://core.subsplash.com` for staging)
+4. Click **Test Connection** to verify credentials and see upcoming broadcasts.
+5. Adjust schedule settings:
+   - **Poll Interval**: How often to check for broadcasts (default: 30 sec)
+   - **Start Lead**: Minutes before scheduled start to begin streaming (default: 1)
+   - **Stop Lag**: Minutes after scheduled end to stop streaming (default: 0)
+6. Click **Save**, then **Enable Scheduler**.
+
+The plugin persists your settings and will auto-start the scheduler when OBS
+launches if it was previously enabled.
+
+## Architecture
+
+| File | Language | Role |
+|---|---|---|
+| `src/plugin-main.cpp` | C++ | Module init, tools menu, config persistence, action timer |
+| `src/subsplash-api.c/h` | C | libcurl HTTP client for Subsplash auth + broadcast API |
+| `src/scheduler.c/h` | C | Background poll thread with atomic action signaling |
+| `src/settings-dialog.cpp/hpp` | C++ | Qt dialog for credentials, settings, and status |
+
+### Thread Safety
+
+- The **background thread** polls the API and sets an atomic action flag.
+- The **main thread** (Qt event loop) drains the flag via a 1-second QTimer
+  and calls `obs_frontend_streaming_start/stop()`.
+- Token caching is protected by a `pthread_mutex_t`.
+- Status strings are copied under a separate mutex.
+
+### Key Subsplash APIs
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/tokens/v1/token` | POST | Authenticate (client_credentials grant) |
+| `/live/v1/broadcasts` | GET | List upcoming/scheduled broadcasts |
+
+## Broadcast Lifecycle
+
+Broadcasts follow this status flow:
+
+```
+scheduled → live → ended → on-demand
+                        ↘ never-happened
+```
+
+The plugin starts streaming when a broadcast is `scheduled` and its start time
+arrives. It stops streaming when the `end_at` time passes.
+
+## Limitations (PoC)
+
+- Manages a single stream (one broadcast at a time)
+- No retry logic for transient API errors
+- Settings UI uses hardcoded English strings (locale file provided for future i18n)
+- Simulated-live broadcasts are detected and the OBS stream is **not** started for them (only true live broadcasts trigger OBS streaming)
