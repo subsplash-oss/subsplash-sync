@@ -35,19 +35,32 @@ typedef struct {
 	bool valid;
 } subsplash_broadcast_t;
 
-bool subsplash_client_init(subsplash_client_t *client, const char *base_url,
-			   const char *client_id, const char *client_secret,
-			   const char *app_key);
+/* Fetch result codes returned alongside the broadcast struct. */
+#define SUBSPLASH_FETCH_OK        0
+#define SUBSPLASH_FETCH_API_ERROR 1
+#define SUBSPLASH_FETCH_NO_DATA   2
+
+bool subsplash_client_init(subsplash_client_t *client, const char *base_url, const char *client_id,
+			   const char *client_secret, const char *app_key);
 
 void subsplash_client_destroy(subsplash_client_t *client);
 
 bool subsplash_client_authenticate(subsplash_client_t *client);
 
-bool subsplash_client_fetch_upcoming(subsplash_client_t *client,
-				     subsplash_broadcast_t *out);
+/*
+ * Fetch the earliest non-terminal broadcast whose scheduled end_at
+ * is still in the future. Skips ended/on-demand/never-happened
+ * results. Returns a SUBSPLASH_FETCH_* result code.
+ */
+int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broadcast_t *out);
 
-bool subsplash_client_test_connection(subsplash_client_t *client,
-				      char *status_out, size_t status_len);
+/*
+ * Fetch a single broadcast by ID. Used as a defensive fallback when the
+ * tracked broadcast drops from list results.
+ */
+int subsplash_client_fetch_by_id(subsplash_client_t *client, const char *id, subsplash_broadcast_t *out);
+
+bool subsplash_client_test_connection(subsplash_client_t *client, char *status_out, size_t status_len);
 
 #ifdef __cplusplus
 }
