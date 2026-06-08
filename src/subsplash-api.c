@@ -1,10 +1,15 @@
 #include "subsplash-api.h"
+
+#include "plugin-support.h"
+
 #include <curl/curl.h>
+
 #include <obs-module.h>
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "plugin-support.h"
+#include <time.h>
 
 /* ------------------------------------------------------------------ */
 /* curl write-callback: appends received data to a growable buffer    */
@@ -15,21 +20,20 @@ struct curl_buf {
 	size_t size;
 };
 
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb,
-			    void *userdata)
+static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
 {
-	size_t bytes = size * nmemb;
+	size_t total_bytes = size * nmemb;
 	struct curl_buf *buf = (struct curl_buf *)userdata;
 
-	char *tmp = realloc(buf->data, buf->size + bytes + 1);
+	char *tmp = realloc(buf->data, buf->size + total_bytes + 1);
 	if (!tmp)
 		return 0;
 
 	buf->data = tmp;
-	memcpy(buf->data + buf->size, ptr, bytes);
-	buf->size += bytes;
+	memcpy(buf->data + buf->size, ptr, total_bytes);
+	buf->size += total_bytes;
 	buf->data[buf->size] = '\0';
-	return bytes;
+	return total_bytes;
 }
 
 /* ------------------------------------------------------------------ */
@@ -38,32 +42,36 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb,
 
 static time_t parse_iso8601(const char *str)
 {
-	int y, mo, d, h, mi, s;
-	if (sscanf(str, "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &mi, &s) !=
-	    6)
+	int year = 0;
+	int month = 0;
+	int day = 0;
+	int hour = 0;
+	int minute = 0;
+	int second = 0;
+
+	if (sscanf(str, "%d-%d-%dT%d:%d:%dZ", &year, &month, &day, &hour, &minute, &second) != 6)
 		return (time_t)-1;
 
-	struct tm tm_val;
-	memset(&tm_val, 0, sizeof(tm_val));
-	tm_val.tm_year = y - 1900;
-	tm_val.tm_mon = mo - 1;
-	tm_val.tm_mday = d;
-	tm_val.tm_hour = h;
-	tm_val.tm_min = mi;
-	tm_val.tm_sec = s;
-	tm_val.tm_isdst = 0;
+	struct tm time_components;
+	memset(&time_components, 0, sizeof(time_components));
+	time_components.tm_year = year - 1900;
+	time_components.tm_mon = month - 1;
+	time_components.tm_mday = day;
+	time_components.tm_hour = hour;
+	time_components.tm_min = minute;
+	time_components.tm_sec = second;
+	time_components.tm_isdst = 0;
 
 #if defined(_WIN32)
-	time_t result = _mkgmtime(&tm_val);
+	time_t result = _mkgmtime(&time_components);
 #elif defined(__APPLE__) || defined(__linux__)
-	time_t result = timegm(&tm_val);
+	time_t result = timegm(&time_components);
 #else
-	/* Portable fallback: temporarily override TZ */
 	char *old_tz = getenv("TZ");
 	char *saved_tz = old_tz ? strdup(old_tz) : NULL;
 	setenv("TZ", "UTC", 1);
 	tzset();
-	time_t result = mktime(&tm_val);
+	time_t result = mktime(&time_components);
 	if (saved_tz) {
 		setenv("TZ", saved_tz, 1);
 		free(saved_tz);
@@ -76,12 +84,84 @@ static time_t parse_iso8601(const char *str)
 }
 
 /* ------------------------------------------------------------------ */
+/* Format current UTC time as ISO-8601 for use in query filters.      */
+/* ------------------------------------------------------------------ */
+
+static void format_utc_now(char *buf, size_t buf_size)
+{
+	time_t now = time(NULL);
+	struct tm utc_time;
+#if defined(_WIN32)
+	gmtime_s(&utc_time, &now);
+#else
+	gmtime_r(&now, &utc_time);
+#endif
+	strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%SZ", &utc_time);
+}
+
+/* ------------------------------------------------------------------ */
+/* Parse a single broadcast object from an obs_data_t JSON node.      */
+/* ------------------------------------------------------------------ */
+
+static void parse_broadcast_json(obs_data_t *broadcast_obj, subsplash_broadcast_t *out)
+{
+	const char *id = obs_data_get_string(broadcast_obj, "id");
+	const char *start_at = obs_data_get_string(broadcast_obj, "start_at");
+	const char *end_at = obs_data_get_string(broadcast_obj, "end_at");
+	const char *status = obs_data_get_string(broadcast_obj, "status");
+
+	if (id)
+		snprintf(out->id, sizeof(out->id), "%s", id);
+	if (start_at)
+		snprintf(out->start_at, sizeof(out->start_at), "%s", start_at);
+	if (end_at)
+		snprintf(out->end_at, sizeof(out->end_at), "%s", end_at);
+	if (status)
+		snprintf(out->status, sizeof(out->status), "%s", status);
+
+	out->start_epoch = parse_iso8601(out->start_at);
+	out->end_epoch = parse_iso8601(out->end_at);
+	out->simulated_live = obs_data_get_bool(broadcast_obj, "simulated_live");
+	out->valid = true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Perform an authenticated GET request and return the response body. */
+/* ------------------------------------------------------------------ */
+
+static CURLcode perform_authenticated_get(subsplash_client_t *client, const char *url, struct curl_buf *response)
+{
+	CURL *curl = curl_easy_init();
+	if (!curl)
+		return CURLE_FAILED_INIT;
+
+	char auth_header[SUBSPLASH_MAX_TOKEN + 32];
+	snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", client->access_token);
+
+	struct curl_slist *headers = NULL;
+	headers = curl_slist_append(headers, auth_header);
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+
+	CURLcode result = curl_easy_perform(curl);
+
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+
+	return result;
+}
+
+/* ------------------------------------------------------------------ */
 /* subsplash_client_init                                              */
 /* ------------------------------------------------------------------ */
 
-bool subsplash_client_init(subsplash_client_t *client, const char *base_url,
-			   const char *client_id, const char *client_secret,
-			   const char *app_key)
+bool subsplash_client_init(subsplash_client_t *client, const char *base_url, const char *client_id,
+			   const char *client_secret, const char *app_key)
 {
 	if (!client || !base_url || !client_id || !client_secret || !app_key)
 		return false;
@@ -89,10 +169,8 @@ bool subsplash_client_init(subsplash_client_t *client, const char *base_url,
 	memset(client, 0, sizeof(*client));
 
 	snprintf(client->base_url, sizeof(client->base_url), "%s", base_url);
-	snprintf(client->client_id, sizeof(client->client_id), "%s",
-		 client_id);
-	snprintf(client->client_secret, sizeof(client->client_secret), "%s",
-		 client_secret);
+	snprintf(client->client_id, sizeof(client->client_id), "%s", client_id);
+	snprintf(client->client_secret, sizeof(client->client_secret), "%s", client_secret);
 	snprintf(client->app_key, sizeof(client->app_key), "%s", app_key);
 
 	pthread_mutex_init(&client->token_lock, NULL);
@@ -126,8 +204,7 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 
 	pthread_mutex_lock(&client->token_lock);
 
-	if (client->access_token[0] != '\0' &&
-	    time(NULL) < client->token_expiry) {
+	if (client->access_token[0] != '\0' && time(NULL) < client->token_expiry) {
 		pthread_mutex_unlock(&client->token_lock);
 		return true;
 	}
@@ -136,14 +213,12 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	snprintf(url, sizeof(url), "%s/tokens/v1/token", client->base_url);
 
 	char post_fields[SUBSPLASH_MAX_FIELD * 3 + 128];
-	snprintf(post_fields, sizeof(post_fields),
-		 "client_id=%s&client_secret=%s&grant_type=client_credentials",
+	snprintf(post_fields, sizeof(post_fields), "client_id=%s&client_secret=%s&grant_type=client_credentials",
 		 client->client_id, client->client_secret);
 
 	CURL *curl = curl_easy_init();
 	if (!curl) {
-		obs_log(LOG_WARNING,
-			"subsplash: curl_easy_init failed for auth");
+		obs_log(LOG_WARNING, "subsplash: curl_easy_init failed for auth");
 		pthread_mutex_unlock(&client->token_lock);
 		return false;
 	}
@@ -151,8 +226,7 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	struct curl_buf buf = {NULL, 0};
 
 	struct curl_slist *headers = NULL;
-	headers = curl_slist_append(
-		headers, "Content-Type: application/x-www-form-urlencoded");
+	headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
 
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -162,14 +236,13 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
 
-	CURLcode res = curl_easy_perform(curl);
+	CURLcode curl_result = curl_easy_perform(curl);
 
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 
-	if (res != CURLE_OK || !buf.data) {
-		obs_log(LOG_WARNING, "subsplash: auth request failed: %s",
-			curl_easy_strerror(res));
+	if (curl_result != CURLE_OK || !buf.data) {
+		obs_log(LOG_WARNING, "subsplash: auth request failed: %s", curl_easy_strerror(curl_result));
 		free(buf.data);
 		pthread_mutex_unlock(&client->token_lock);
 		return false;
@@ -179,8 +252,7 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	free(buf.data);
 
 	if (!json) {
-		obs_log(LOG_WARNING,
-			"subsplash: failed to parse auth JSON response");
+		obs_log(LOG_WARNING, "subsplash: failed to parse auth JSON response");
 		pthread_mutex_unlock(&client->token_lock);
 		return false;
 	}
@@ -189,19 +261,16 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	int expires_in = (int)obs_data_get_int(json, "expires_in");
 
 	if (!token || token[0] == '\0') {
-		obs_log(LOG_WARNING,
-			"subsplash: no access_token in auth response");
+		obs_log(LOG_WARNING, "subsplash: no access_token in auth response");
 		obs_data_release(json);
 		pthread_mutex_unlock(&client->token_lock);
 		return false;
 	}
 
-	snprintf(client->access_token, sizeof(client->access_token), "%s",
-		 token);
+	snprintf(client->access_token, sizeof(client->access_token), "%s", token);
 	client->token_expiry = time(NULL) + expires_in - 60;
 
-	obs_log(LOG_INFO, "subsplash: authenticated, token expires in %ds",
-		expires_in);
+	obs_log(LOG_INFO, "subsplash: authenticated, token expires in %ds", expires_in);
 
 	obs_data_release(json);
 	pthread_mutex_unlock(&client->token_lock);
@@ -209,142 +278,174 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 }
 
 /* ------------------------------------------------------------------ */
-/* subsplash_client_fetch_upcoming                                    */
+/* subsplash_client_fetch_broadcasts                                  */
+/*                                                                    */
+/* Queries broadcasts whose end_at is in the future. Results arrive   */
+/* sorted by start time (ascending). Terminal statuses (ended,    */
+/* on-demand, never-happened) are skipped so a just-finished          */
+/* broadcast doesn't shadow the next scheduled event.                 */
 /* ------------------------------------------------------------------ */
 
-bool subsplash_client_fetch_upcoming(subsplash_client_t *client,
-				     subsplash_broadcast_t *out)
+int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broadcast_t *out)
 {
 	if (!client || !out)
-		return false;
+		return SUBSPLASH_FETCH_API_ERROR;
 
 	memset(out, 0, sizeof(*out));
 	out->valid = false;
 
 	if (!subsplash_client_authenticate(client))
-		return false;
+		return SUBSPLASH_FETCH_API_ERROR;
 
-	CURL *curl = curl_easy_init();
-	if (!curl) {
-		obs_log(LOG_WARNING,
-			"subsplash: curl_easy_init failed for fetch");
-		return false;
-	}
+	CURL *escape_handle = curl_easy_init();
+	if (!escape_handle)
+		return SUBSPLASH_FETCH_API_ERROR;
 
-	char *enc_app_key = curl_easy_escape(curl, client->app_key, 0);
+	char *encoded_app_key = curl_easy_escape(escape_handle, client->app_key, 0);
 
-	char url[SUBSPLASH_MAX_URL + 256];
+	char now_iso[32];
+	format_utc_now(now_iso, sizeof(now_iso));
+
+	/*
+	 * Use filter[end_at] with the > operator to keep both scheduled
+	 * and live broadcasts visible. The > prefix on the value tells
+	 * the kit/qry filter parser to use GreaterThan comparison.
+	 */
+	char url[SUBSPLASH_MAX_URL + 512];
 	snprintf(url, sizeof(url),
 		 "%s/live/v1/broadcasts?"
 		 "filter%%5Bapp_key%%5D=%s&"
-		 "filter%%5Bupcoming%%5D=true&"
-		 "sort=start_at&limit=5",
-		 client->base_url, enc_app_key ? enc_app_key : client->app_key);
+		 "filter%%5Bend_at%%5D=%%3E%s&"
+		 "page%%5Bsize%%5D=5",
+		 client->base_url, encoded_app_key ? encoded_app_key : client->app_key, now_iso);
 
-	curl_free(enc_app_key);
+	curl_free(encoded_app_key);
+	curl_easy_cleanup(escape_handle);
 
-	char auth_header[SUBSPLASH_MAX_TOKEN + 32];
-	snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s",
-		 client->access_token);
+	struct curl_buf response = {NULL, 0};
+	CURLcode curl_result = perform_authenticated_get(client, url, &response);
 
-	struct curl_slist *headers = NULL;
-	headers = curl_slist_append(headers, auth_header);
-
-	struct curl_buf buf = {NULL, 0};
-
-	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-
-	CURLcode res = curl_easy_perform(curl);
-
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(curl);
-
-	if (res != CURLE_OK || !buf.data) {
-		obs_log(LOG_WARNING, "subsplash: fetch broadcasts failed: %s",
-			curl_easy_strerror(res));
-		free(buf.data);
-		return false;
+	if (curl_result != CURLE_OK || !response.data) {
+		obs_log(LOG_WARNING, "subsplash: fetch broadcasts failed: %s", curl_easy_strerror(curl_result));
+		free(response.data);
+		return SUBSPLASH_FETCH_API_ERROR;
 	}
 
-	obs_data_t *json = obs_data_create_from_json(buf.data);
-	free(buf.data);
+	obs_data_t *json = obs_data_create_from_json(response.data);
+	free(response.data);
 
 	if (!json) {
-		obs_log(LOG_WARNING,
-			"subsplash: failed to parse broadcasts JSON");
-		return false;
+		obs_log(LOG_WARNING, "subsplash: failed to parse broadcasts JSON");
+		return SUBSPLASH_FETCH_API_ERROR;
 	}
 
 	obs_data_t *embedded = obs_data_get_obj(json, "_embedded");
 	if (!embedded) {
-		obs_log(LOG_INFO,
-			"subsplash: no _embedded object in response");
+		obs_log(LOG_INFO, "subsplash: no _embedded object in response");
 		obs_data_release(json);
-		return false;
+		return SUBSPLASH_FETCH_NO_DATA;
 	}
 
-	obs_data_array_t *broadcasts =
-		obs_data_get_array(embedded, "broadcasts");
-	if (!broadcasts || obs_data_array_count(broadcasts) == 0) {
-		obs_log(LOG_INFO, "subsplash: no upcoming broadcasts found");
+	obs_data_array_t *broadcasts = obs_data_get_array(embedded, "broadcasts");
+	size_t broadcast_count = broadcasts ? obs_data_array_count(broadcasts) : 0;
+
+	if (broadcast_count == 0) {
+		obs_log(LOG_INFO, "subsplash: no active broadcasts found");
 		if (broadcasts)
 			obs_data_array_release(broadcasts);
 		obs_data_release(embedded);
 		obs_data_release(json);
-		return false;
+		return SUBSPLASH_FETCH_NO_DATA;
 	}
 
-	obs_data_t *first = obs_data_array_item(broadcasts, 0);
-	if (!first) {
-		obs_data_array_release(broadcasts);
-		obs_data_release(embedded);
-		obs_data_release(json);
-		return false;
+	/*
+	 * Results arrive sorted by start time (ascending). Skip
+	 * terminal broadcasts (ended/on-demand/never-happened) so we
+	 * pick up the next actionable event even when a just-finished
+	 * broadcast is still in the time window.
+	 */
+	obs_data_t *chosen = NULL;
+	for (size_t i = 0; i < broadcast_count; i++) {
+		obs_data_t *item = obs_data_array_item(broadcasts, i);
+		const char *status = obs_data_get_string(item, "status");
+
+		bool terminal = strcmp(status, "ended") == 0 || strcmp(status, "on-demand") == 0 ||
+				strcmp(status, "never-happened") == 0;
+
+		if (!terminal) {
+			chosen = item;
+			break;
+		}
+		obs_data_release(item);
 	}
 
-	const char *id = obs_data_get_string(first, "id");
-	const char *start_at = obs_data_get_string(first, "start_at");
-	const char *end_at = obs_data_get_string(first, "end_at");
-	const char *status = obs_data_get_string(first, "status");
-
-	if (id)
-		snprintf(out->id, sizeof(out->id), "%s", id);
-	if (start_at)
-		snprintf(out->start_at, sizeof(out->start_at), "%s", start_at);
-	if (end_at)
-		snprintf(out->end_at, sizeof(out->end_at), "%s", end_at);
-	if (status)
-		snprintf(out->status, sizeof(out->status), "%s", status);
-
-	out->start_epoch = parse_iso8601(out->start_at);
-	out->end_epoch = parse_iso8601(out->end_at);
-	out->simulated_live = obs_data_get_bool(first, "simulated_live");
-	out->valid = true;
-
-	obs_log(LOG_INFO,
-		"subsplash: next broadcast id=%s start=%s status=%s simulated_live=%s",
-		out->id, out->start_at, out->status,
-		out->simulated_live ? "true" : "false");
-
-	obs_data_release(first);
 	obs_data_array_release(broadcasts);
 	obs_data_release(embedded);
 	obs_data_release(json);
 
-	return true;
+	if (!chosen)
+		return SUBSPLASH_FETCH_NO_DATA;
+
+	parse_broadcast_json(chosen, out);
+	obs_data_release(chosen);
+
+	obs_log(LOG_INFO, "subsplash: broadcast id=%s start=%s end=%s status=%s simulated_live=%s", out->id,
+		out->start_at, out->end_at, out->status, out->simulated_live ? "true" : "false");
+
+	return SUBSPLASH_FETCH_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* subsplash_client_fetch_by_id                                       */
+/* ------------------------------------------------------------------ */
+
+int subsplash_client_fetch_by_id(subsplash_client_t *client, const char *id, subsplash_broadcast_t *out)
+{
+	if (!client || !id || !out)
+		return SUBSPLASH_FETCH_API_ERROR;
+
+	memset(out, 0, sizeof(*out));
+	out->valid = false;
+
+	if (!subsplash_client_authenticate(client))
+		return SUBSPLASH_FETCH_API_ERROR;
+
+	char url[SUBSPLASH_MAX_URL + SUBSPLASH_MAX_ID + 32];
+	snprintf(url, sizeof(url), "%s/live/v1/broadcasts/%s", client->base_url, id);
+
+	struct curl_buf response = {NULL, 0};
+	CURLcode curl_result = perform_authenticated_get(client, url, &response);
+
+	if (curl_result != CURLE_OK || !response.data) {
+		obs_log(LOG_WARNING, "subsplash: fetch broadcast %s failed: %s", id, curl_easy_strerror(curl_result));
+		free(response.data);
+		return SUBSPLASH_FETCH_API_ERROR;
+	}
+
+	obs_data_t *json = obs_data_create_from_json(response.data);
+	free(response.data);
+
+	if (!json) {
+		obs_log(LOG_WARNING, "subsplash: failed to parse broadcast %s JSON", id);
+		return SUBSPLASH_FETCH_API_ERROR;
+	}
+
+	parse_broadcast_json(json, out);
+	obs_data_release(json);
+
+	if (!out->valid)
+		return SUBSPLASH_FETCH_NO_DATA;
+
+	obs_log(LOG_INFO, "subsplash: fetched broadcast id=%s status=%s end=%s", out->id, out->status, out->end_at);
+
+	return SUBSPLASH_FETCH_OK;
 }
 
 /* ------------------------------------------------------------------ */
 /* subsplash_client_test_connection                                   */
 /* ------------------------------------------------------------------ */
 
-bool subsplash_client_test_connection(subsplash_client_t *client,
-				      char *status_out, size_t status_len)
+bool subsplash_client_test_connection(subsplash_client_t *client, char *status_out, size_t status_len)
 {
 	if (!client || !status_out || status_len == 0)
 		return false;
@@ -354,13 +455,13 @@ bool subsplash_client_test_connection(subsplash_client_t *client,
 		return false;
 	}
 
-	subsplash_broadcast_t bc;
-	if (subsplash_client_fetch_upcoming(client, &bc) && bc.valid) {
-		snprintf(status_out, status_len,
-			 "Connected. Next broadcast: %s", bc.start_at);
+	subsplash_broadcast_t broadcast;
+	int result = subsplash_client_fetch_broadcasts(client, &broadcast);
+
+	if (result == SUBSPLASH_FETCH_OK && broadcast.valid) {
+		snprintf(status_out, status_len, "Connected. Next broadcast: %s", broadcast.start_at);
 	} else {
-		snprintf(status_out, status_len,
-			 "Connected. No upcoming broadcasts.");
+		snprintf(status_out, status_len, "Connected. No upcoming broadcasts.");
 	}
 
 	return true;
