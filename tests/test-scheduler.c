@@ -1,0 +1,473 @@
+/*
+ * Unit tests for scheduler.c
+ *
+ * Static functions are accessed by #include-ing the source file
+ * directly.  The subsplash API functions called by the scheduler
+ * are replaced with controllable mocks defined below.
+ */
+#include <stdarg.h>
+#include <stddef.h>
+#include <setjmp.h>
+#include <cmocka.h>
+#include <string.h>
+#include <time.h>
+
+/* Pull in headers for types before defining mocks. */
+#include "subsplash-api.h"
+#include "scheduler.h"
+
+/* ------------------------------------------------------------------ */
+/* Mock API layer                                                     */
+/* ------------------------------------------------------------------ */
+
+static int mock_fetch_result;
+static subsplash_broadcast_t mock_broadcast;
+static int mock_by_id_result;
+static subsplash_broadcast_t mock_by_id_broadcast;
+
+bool subsplash_client_init(subsplash_client_t *client,
+			   const char *base_url, const char *client_id,
+			   const char *client_secret, const char *app_key)
+{
+	(void)client;
+	(void)base_url;
+	(void)client_id;
+	(void)client_secret;
+	(void)app_key;
+	return true;
+}
+
+void subsplash_client_destroy(subsplash_client_t *client)
+{
+	(void)client;
+}
+
+int subsplash_client_fetch_broadcasts(subsplash_client_t *client,
+				      subsplash_broadcast_t *out)
+{
+	(void)client;
+	if (out)
+		*out = mock_broadcast;
+	return mock_fetch_result;
+}
+
+int subsplash_client_fetch_by_id(subsplash_client_t *client,
+				 const char *id,
+				 subsplash_broadcast_t *out)
+{
+	(void)client;
+	(void)id;
+	if (out)
+		*out = mock_by_id_broadcast;
+	return mock_by_id_result;
+}
+
+/*
+ * Include scheduler.c to gain access to its static functions.
+ * Headers already included above are skipped via #pragma once.
+ */
+#include "scheduler.c"
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+static void reset_mocks(void)
+{
+	mock_fetch_result = SUBSPLASH_FETCH_NO_DATA;
+	memset(&mock_broadcast, 0, sizeof(mock_broadcast));
+	mock_by_id_result = SUBSPLASH_FETCH_NO_DATA;
+	memset(&mock_by_id_broadcast, 0, sizeof(mock_by_id_broadcast));
+}
+
+static void init_test_scheduler(scheduler_t *s)
+{
+	memset(s, 0, sizeof(*s));
+	pthread_mutex_init(&s->lock, NULL);
+	pthread_mutex_init(&s->stop_mutex, NULL);
+	pthread_cond_init(&s->stop_cond, NULL);
+	s->poll_interval_sec = 30;
+	s->start_lead_minutes = SCHED_DEFAULT_START_LEAD_MINUTES;
+	s->stop_lag_minutes = SCHED_DEFAULT_STOP_LAG_MINUTES;
+}
+
+static void destroy_test_scheduler(scheduler_t *s)
+{
+	pthread_mutex_destroy(&s->lock);
+	pthread_mutex_destroy(&s->stop_mutex);
+	pthread_cond_destroy(&s->stop_cond);
+}
+
+static void make_broadcast(subsplash_broadcast_t *b, const char *id,
+			   const char *status, time_t start, time_t end,
+			   bool simulated_live)
+{
+	memset(b, 0, sizeof(*b));
+	snprintf(b->id, sizeof(b->id), "%s", id);
+	snprintf(b->status, sizeof(b->status), "%s", status);
+	b->start_epoch = start;
+	b->end_epoch = end;
+	b->simulated_live = simulated_live;
+	b->valid = true;
+	snprintf(b->start_at, sizeof(b->start_at), "start");
+	snprintf(b->end_at, sizeof(b->end_at), "end");
+}
+
+/* ================================================================== */
+/* compute_backoff_sec tests                                          */
+/* ================================================================== */
+
+static void test_backoff_zero_failures(void **state)
+{
+	(void)state;
+	assert_int_equal(compute_backoff_sec(0), 0);
+}
+
+static void test_backoff_negative_failures(void **state)
+{
+	(void)state;
+	assert_int_equal(compute_backoff_sec(-1), 0);
+}
+
+static void test_backoff_one_failure(void **state)
+{
+	(void)state;
+	/* base_delay = 2, jitter in [1, 2]. */
+	for (int i = 0; i < 50; i++) {
+		int val = compute_backoff_sec(1);
+		assert_in_range(val, 1, SCHED_BACKOFF_INITIAL_SEC);
+	}
+}
+
+static void test_backoff_two_failures(void **state)
+{
+	(void)state;
+	/* base_delay = 4, jitter in [2, 4]. */
+	for (int i = 0; i < 50; i++) {
+		int val = compute_backoff_sec(2);
+		assert_in_range(val, 2, 4);
+	}
+}
+
+static void test_backoff_cap(void **state)
+{
+	(void)state;
+	for (int i = 0; i < 50; i++) {
+		int val = compute_backoff_sec(100);
+		assert_in_range(val, SCHED_BACKOFF_MAX_SEC / 2,
+				SCHED_BACKOFF_MAX_SEC);
+	}
+}
+
+/* ================================================================== */
+/* check_cached_stop tests                                            */
+/* ================================================================== */
+
+static void test_cached_stop_no_cache(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	s.cached_end_epoch = 0;
+
+	check_cached_stop(&s, time(NULL) + 9999);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_cached_stop_before_trigger(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	s.stop_lag_minutes = 2;
+	s.cached_end_epoch = time(NULL) + 600;
+
+	check_cached_stop(&s, time(NULL));
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	assert_false(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_cached_stop_at_trigger(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	s.stop_lag_minutes = 2;
+	s.cached_end_epoch = 1000;
+	snprintf(s.acted_broadcast_id, sizeof(s.acted_broadcast_id),
+		 "bc-1");
+
+	/* trigger_stop = 1000 + 120 = 1120. */
+	check_cached_stop(&s, 1120);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+	assert_true(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_cached_stop_already_stopped(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	s.stop_lag_minutes = 0;
+	s.cached_end_epoch = 100;
+	s.acted_stopped = true;
+
+	check_cached_stop(&s, 9999);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+
+	destroy_test_scheduler(&s);
+}
+
+/* ================================================================== */
+/* scheduler_poll_once tests                                          */
+/* ================================================================== */
+
+static void test_poll_api_error(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+	mock_fetch_result = SUBSPLASH_FETCH_API_ERROR;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.consecutive_failures, 1);
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.consecutive_failures, 2);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_no_data(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+	mock_fetch_result = SUBSPLASH_FETCH_NO_DATA;
+
+	scheduler_poll_once(&s);
+	assert_string_equal(s.status_text, "No upcoming broadcasts");
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_start_in_window(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+	make_broadcast(&mock_broadcast, "bc-100", "scheduled",
+		       now + 60, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_START);
+	assert_true(s.acted_started);
+	assert_int_equal(s.consecutive_failures, 0);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_before_start_window(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+	/* start_lead = 2 min, start is 5 min away. */
+	make_broadcast(&mock_broadcast, "bc-101", "scheduled",
+		       now + 300, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	assert_false(s.acted_started);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_stop_past_end(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+	/* Broadcast already ended, end + lag has passed. */
+	make_broadcast(&mock_broadcast, "bc-200", "scheduled",
+		       now - 7200, now - 600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	/*
+	 * First poll: broadcast is past end, also past start window
+	 * so both START and STOP fire.  STOP overwrites START in the
+	 * action field.
+	 */
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+	assert_true(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_broadcast_transition(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/* First broadcast: started but not stopped. */
+	make_broadcast(&mock_broadcast, "bc-300", "live",
+		       now - 3600, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_true(s.acted_started);
+	s.action = SCHED_ACTION_NONE;
+
+	/*
+	 * Second broadcast: different ID triggers RESTART.  Put it
+	 * far enough out that it's NOT in the start window yet, so
+	 * only the RESTART action fires in this poll cycle.
+	 */
+	make_broadcast(&mock_broadcast, "bc-301", "scheduled",
+		       now + 600, now + 7200, false);
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_RESTART);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_simulated_live_skip(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+	make_broadcast(&mock_broadcast, "bc-400", "scheduled",
+		       now + 60, now + 3600, true);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	/* acted_started is still set -- the scheduler tracks it. */
+	assert_true(s.acted_started);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_terminal_status_stop(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/* Simulate a broadcast that was started, then ended early. */
+	make_broadcast(&mock_broadcast, "bc-500", "live",
+		       now - 3600, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_true(s.acted_started);
+	s.action = SCHED_ACTION_NONE;
+
+	/* Broadcast transitions to "ended". */
+	make_broadcast(&mock_broadcast, "bc-500", "ended",
+		       now - 3600, now + 3600, false);
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+	assert_true(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_no_data_fallback_by_id(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/* First poll picks up a broadcast and starts. */
+	make_broadcast(&mock_broadcast, "bc-600", "live",
+		       now - 3600, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+	scheduler_poll_once(&s);
+	assert_true(s.acted_started);
+	s.action = SCHED_ACTION_NONE;
+
+	/*
+	 * Next poll returns no data, but the by-id fallback finds
+	 * the broadcast in terminal state.
+	 */
+	mock_fetch_result = SUBSPLASH_FETCH_NO_DATA;
+	memset(&mock_broadcast, 0, sizeof(mock_broadcast));
+
+	make_broadcast(&mock_by_id_broadcast, "bc-600", "ended",
+		       now - 3600, now + 3600, false);
+	mock_by_id_result = SUBSPLASH_FETCH_OK;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+
+	destroy_test_scheduler(&s);
+}
+
+/* ================================================================== */
+/* main                                                               */
+/* ================================================================== */
+
+int main(void)
+{
+	const struct CMUnitTest tests[] = {
+		/* backoff */
+		cmocka_unit_test(test_backoff_zero_failures),
+		cmocka_unit_test(test_backoff_negative_failures),
+		cmocka_unit_test(test_backoff_one_failure),
+		cmocka_unit_test(test_backoff_two_failures),
+		cmocka_unit_test(test_backoff_cap),
+		/* cached stop */
+		cmocka_unit_test(test_cached_stop_no_cache),
+		cmocka_unit_test(test_cached_stop_before_trigger),
+		cmocka_unit_test(test_cached_stop_at_trigger),
+		cmocka_unit_test(test_cached_stop_already_stopped),
+		/* poll */
+		cmocka_unit_test(test_poll_api_error),
+		cmocka_unit_test(test_poll_no_data),
+		cmocka_unit_test(test_poll_start_in_window),
+		cmocka_unit_test(test_poll_before_start_window),
+		cmocka_unit_test(test_poll_stop_past_end),
+		cmocka_unit_test(test_poll_broadcast_transition),
+		cmocka_unit_test(test_poll_simulated_live_skip),
+		cmocka_unit_test(test_poll_terminal_status_stop),
+		cmocka_unit_test(test_poll_no_data_fallback_by_id),
+	};
+
+	return cmocka_run_group_tests(tests, NULL, NULL);
+}
