@@ -8,9 +8,27 @@ extern "C" {
 #include <pthread.h>
 #include <stdbool.h>
 
-#define SCHED_ACTION_NONE  0
-#define SCHED_ACTION_START 1
-#define SCHED_ACTION_STOP  2
+#define SCHED_ACTION_NONE    0
+#define SCHED_ACTION_START   1
+#define SCHED_ACTION_STOP    2
+#define SCHED_ACTION_RESTART 3
+
+/*
+ * Start lead must not exceed 2 minutes or the stream won't be
+ * associated with the scheduled broadcast event at start time.
+ */
+#define SCHED_DEFAULT_START_LEAD_MINUTES 2
+#define SCHED_DEFAULT_STOP_LAG_MINUTES   2
+
+#define SCHED_BACKOFF_INITIAL_SEC 2
+#define SCHED_BACKOFF_MAX_SEC     60
+
+/*
+ * Delay between stop and start during a broadcast transition.
+ * Must exceed the backend's restart delay (20s for RTMP) so the
+ * old session is fully ended before the new connection is made.
+ */
+#define SCHED_RESTART_DELAY_SEC 30
 
 typedef struct {
 	subsplash_client_t api;
@@ -22,10 +40,22 @@ typedef struct {
 	int start_lead_minutes;
 	int stop_lag_minutes;
 
-	char acted_broadcast_id[64];
+	/* Tracked broadcast state. */
+	char acted_broadcast_id[SUBSPLASH_MAX_ID];
 	bool acted_started;
 	bool acted_stopped;
 
+	/*
+	 * Cached end time from the tracked broadcast. Used as the
+	 * primary STOP signal and as a safety net when the API is
+	 * unreachable.
+	 */
+	time_t cached_end_epoch;
+
+	/* Retry backoff state for transient API failures. */
+	int consecutive_failures;
+
+	/* UI-visible status strings. */
 	char status_text[256];
 	char next_broadcast_info[256];
 
@@ -34,17 +64,15 @@ typedef struct {
 	volatile bool stop_requested;
 } scheduler_t;
 
-bool scheduler_init(scheduler_t *sched);
-void scheduler_configure(scheduler_t *sched, const char *base_url,
-			 const char *client_id, const char *client_secret,
-			 const char *app_key, int poll_interval_sec,
-			 int start_lead_minutes, int stop_lag_minutes);
-bool scheduler_start(scheduler_t *sched);
-void scheduler_stop(scheduler_t *sched);
-void scheduler_destroy(scheduler_t *sched);
-long scheduler_consume_action(scheduler_t *sched);
-void scheduler_get_status(scheduler_t *sched, char *status, size_t status_len,
-			  char *next_bc, size_t next_bc_len);
+bool scheduler_init(scheduler_t *scheduler);
+void scheduler_configure(scheduler_t *scheduler, const char *base_url, const char *client_id, const char *client_secret,
+			 const char *app_key, int poll_interval_sec, int start_lead_minutes, int stop_lag_minutes);
+bool scheduler_start(scheduler_t *scheduler);
+void scheduler_stop(scheduler_t *scheduler);
+void scheduler_destroy(scheduler_t *scheduler);
+long scheduler_consume_action(scheduler_t *scheduler);
+void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_len, char *next_broadcast,
+			  size_t next_broadcast_len);
 
 #ifdef __cplusplus
 }

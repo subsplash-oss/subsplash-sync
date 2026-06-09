@@ -41,6 +41,13 @@ bool g_scheduler_enabled = false;
 static char g_config_path[512];
 static QTimer *g_action_timer = nullptr;
 
+/*
+ * Restart state machine: after a RESTART action we stop the stream,
+ * wait for OBS_FRONTEND_EVENT_STREAMING_STOPPED (full cleanup) plus a safety delay, then start again.
+ */
+static bool g_restart_pending = false;
+static time_t g_restart_stop_time = 0;
+
 /* Exposed to scheduler-panel.cpp via extern "C" */
 extern "C" const char *sched_get_config_path(void)
 {
@@ -56,6 +63,18 @@ static void on_action_tick()
 	if (!g_scheduler.running)
 		return;
 
+	if (g_restart_pending) {
+		bool stream_stopped = !obs_frontend_streaming_active();
+		bool delay_elapsed = (time(NULL) - g_restart_stop_time) >= SCHED_RESTART_DELAY_SEC;
+
+		if (stream_stopped && delay_elapsed) {
+			g_restart_pending = false;
+			obs_frontend_streaming_start();
+			obs_log(LOG_INFO, "Auto-started streaming after restart delay");
+		}
+		return;
+	}
+
 	long action = scheduler_consume_action(&g_scheduler);
 	if (action == SCHED_ACTION_START) {
 		obs_frontend_streaming_start();
@@ -63,6 +82,14 @@ static void on_action_tick()
 	} else if (action == SCHED_ACTION_STOP) {
 		obs_frontend_streaming_stop();
 		obs_log(LOG_INFO, "Auto-stopped streaming from schedule");
+	} else if (action == SCHED_ACTION_RESTART) {
+		obs_frontend_streaming_stop();
+		g_restart_pending = true;
+		g_restart_stop_time = time(NULL);
+		obs_log(LOG_INFO,
+			"Auto-stopped streaming for broadcast transition, "
+			"will restart in %ds",
+			SCHED_RESTART_DELAY_SEC);
 	}
 }
 
@@ -76,11 +103,9 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 		return;
 
 	/* Register the dockable panel */
-	QMainWindow *main_window =
-		static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	QMainWindow *main_window = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	auto *panel = new SchedulerPanel(main_window);
-	obs_frontend_add_dock_by_id("subsplash-scheduler",
-				    "Subsplash Live Scheduler", panel);
+	obs_frontend_add_dock_by_id("subsplash-scheduler", "Subsplash Live Scheduler", panel);
 
 	/* Auto-start scheduler if previously enabled */
 	obs_data_t *cfg = obs_data_create_from_json_file(g_config_path);
@@ -96,18 +121,21 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	const char *client_id = obs_data_get_string(cfg, "client_id");
 	const char *client_secret = obs_data_get_string(cfg, "client_secret");
 	const char *app_key = obs_data_get_string(cfg, "app_key");
+	const char *base_url = obs_data_get_string(cfg, "base_url");
 	int poll = (int)obs_data_get_int(cfg, "poll_interval");
+	int start_lead = (int)obs_data_get_int(cfg, "start_lead");
+	int stop_lag = (int)obs_data_get_int(cfg, "stop_lag");
 
-	if (client_id[0] != '\0' && client_secret[0] != '\0' &&
-	    app_key[0] != '\0') {
-		scheduler_configure(&g_scheduler,
-				    "https://core.subsplash.com",
-				    client_id, client_secret, app_key,
-				    poll > 0 ? poll : 30, 0, 0);
+	if (!base_url || base_url[0] == '\0')
+		base_url = "https://core.subsplash.com";
+
+	if (client_id[0] != '\0' && client_secret[0] != '\0' && app_key[0] != '\0') {
+		scheduler_configure(&g_scheduler, base_url, client_id, client_secret, app_key, poll > 0 ? poll : 30,
+				    start_lead > 0 ? start_lead : SCHED_DEFAULT_START_LEAD_MINUTES,
+				    stop_lag > 0 ? stop_lag : SCHED_DEFAULT_STOP_LAG_MINUTES);
 		scheduler_start(&g_scheduler);
 		g_scheduler_enabled = true;
-		obs_log(LOG_INFO,
-			"Auto-started scheduler from saved config");
+		obs_log(LOG_INFO, "Auto-started scheduler from saved config");
 	}
 
 	obs_data_release(cfg);
@@ -132,8 +160,7 @@ bool obs_module_load(void)
 
 	char *module_config = obs_module_config_path("config.json");
 	if (module_config) {
-		snprintf(g_config_path, sizeof(g_config_path), "%s",
-			 module_config);
+		snprintf(g_config_path, sizeof(g_config_path), "%s", module_config);
 		bfree(module_config);
 	}
 
