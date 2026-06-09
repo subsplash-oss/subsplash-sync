@@ -5,6 +5,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QMessageBox>
 #include <obs-module.h>
@@ -45,11 +46,15 @@ void SchedulerPanel::SetupUI()
 	setMinimumWidth(450);
 
 	auto *main_layout = new QVBoxLayout(this);
+	main_layout->setContentsMargins(6, 6, 6, 6);
+	main_layout->setSpacing(4);
 
 	/* ---- API Credentials ---- */
 	auto *cred_group = new QGroupBox(T("Credentials.Title"), this);
 	auto *cred_form = new QFormLayout;
 	cred_form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	cred_form->setContentsMargins(6, 0, 6, 4);
+	cred_form->setVerticalSpacing(4);
 
 	client_id_edit = new QLineEdit(this);
 	client_secret_edit = new QLineEdit(this);
@@ -65,8 +70,9 @@ void SchedulerPanel::SetupUI()
 
 	/* ---- Schedule Settings ---- */
 	auto *sched_group = new QGroupBox(T("Schedule.Title"), this);
-	auto *sched_form = new QFormLayout;
-	sched_form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	auto *sched_grid = new QGridLayout;
+	sched_grid->setContentsMargins(6, 0, 6, 4);
+	sched_grid->setVerticalSpacing(4);
 
 	poll_interval_spin = new QSpinBox(this);
 	poll_interval_spin->setRange(10, 300);
@@ -83,10 +89,18 @@ void SchedulerPanel::SetupUI()
 	stop_lag_spin->setValue(SCHED_DEFAULT_STOP_LAG_MINUTES);
 	stop_lag_spin->setMinimumWidth(80);
 
-	sched_form->addRow(T("Schedule.PollInterval"), poll_interval_spin);
-	sched_form->addRow(T("Schedule.StartLead"), start_lead_spin);
-	sched_form->addRow(T("Schedule.StopLag"), stop_lag_spin);
-	sched_group->setLayout(sched_form);
+	show_on_start_check = new QCheckBox(T("Schedule.ShowOnStart"), this);
+
+	sched_grid->addWidget(new QLabel(T("Schedule.StartLead"), this), 0, 0);
+	sched_grid->addWidget(start_lead_spin, 0, 1);
+	sched_grid->addWidget(new QLabel(T("Schedule.PollInterval"), this), 0, 2);
+	sched_grid->addWidget(poll_interval_spin, 0, 3);
+
+	sched_grid->addWidget(new QLabel(T("Schedule.StopLag"), this), 1, 0);
+	sched_grid->addWidget(stop_lag_spin, 1, 1);
+	sched_grid->addWidget(show_on_start_check, 1, 2, 1, 2);
+
+	sched_group->setLayout(sched_grid);
 	main_layout->addWidget(sched_group);
 
 	/* ---- Buttons ---- */
@@ -106,6 +120,8 @@ void SchedulerPanel::SetupUI()
 	/* ---- Status ---- */
 	auto *status_group = new QGroupBox(T("Status.Title"), this);
 	auto *status_form = new QFormLayout;
+	status_form->setContentsMargins(6, 0, 6, 4);
+	status_form->setVerticalSpacing(2);
 
 	conn_status_label = new QLabel(T("Status.Unknown"), this);
 	sched_status_label = new QLabel(T("Status.Stopped"), this);
@@ -149,6 +165,7 @@ void SchedulerPanel::LoadSettings()
 	poll_interval_spin->setValue((int)obs_data_get_int(data, "poll_interval"));
 	start_lead_spin->setValue((int)obs_data_get_int(data, "start_lead"));
 	stop_lag_spin->setValue((int)obs_data_get_int(data, "stop_lag"));
+	show_on_start_check->setChecked(obs_data_get_bool(data, "show_on_start"));
 
 	obs_data_release(data);
 
@@ -168,6 +185,7 @@ void SchedulerPanel::SaveSettings()
 	obs_data_set_int(data, "poll_interval", poll_interval_spin->value());
 	obs_data_set_int(data, "start_lead", start_lead_spin->value());
 	obs_data_set_int(data, "stop_lag", stop_lag_spin->value());
+	obs_data_set_bool(data, "show_on_start", show_on_start_check->isChecked());
 	obs_data_set_bool(data, "enabled", g_scheduler_enabled);
 
 	obs_data_save_json_safe(data, path, "tmp", "bak");
@@ -207,13 +225,14 @@ void SchedulerPanel::OnSave()
 				    start_lead_spin->value(), stop_lag_spin->value());
 	}
 
-	conn_status_label->setText(T("Status.Saved"));
+	save_btn->setText(T("Status.Saved"));
+	QTimer::singleShot(2000, this, [this]() { save_btn->setText(T("Buttons.Save")); });
 }
 
 void SchedulerPanel::OnEnableToggled()
 {
 	if (enable_btn->isChecked()) {
-		SaveSettings();
+		g_scheduler_enabled = true;
 
 		scheduler_configure(&g_scheduler, DEFAULT_BASE_URL, client_id_edit->text().toUtf8().constData(),
 				    client_secret_edit->text().toUtf8().constData(),
@@ -221,12 +240,13 @@ void SchedulerPanel::OnEnableToggled()
 				    start_lead_spin->value(), stop_lag_spin->value());
 
 		scheduler_start(&g_scheduler);
-		g_scheduler_enabled = true;
+		SaveSettings();
 		enable_btn->setText(T("Buttons.Disable"));
 		obs_log(LOG_INFO, "Scheduler enabled");
 	} else {
 		scheduler_stop(&g_scheduler);
 		g_scheduler_enabled = false;
+		SaveSettings();
 		enable_btn->setText(T("Buttons.Enable"));
 		obs_log(LOG_INFO, "Scheduler disabled");
 	}
@@ -234,7 +254,16 @@ void SchedulerPanel::OnEnableToggled()
 
 void SchedulerPanel::OnStatusTick()
 {
-	if (g_scheduler.running) {
+	bool running = g_scheduler.running;
+
+	if (enable_btn->isChecked() != running) {
+		enable_btn->blockSignals(true);
+		enable_btn->setChecked(running);
+		enable_btn->setText(running ? T("Buttons.Disable") : T("Buttons.Enable"));
+		enable_btn->blockSignals(false);
+	}
+
+	if (running) {
 		sched_status_label->setText(T("Status.Running"));
 
 		char status_buf[256];

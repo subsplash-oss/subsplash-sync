@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QLabel>
@@ -36,6 +37,7 @@ private:
 	QSpinBox *poll_interval_spin;
 	QSpinBox *start_lead_spin;
 	QSpinBox *stop_lag_spin;
+	QCheckBox *show_on_start_check;
 	QPushButton *test_btn;
 	QPushButton *save_btn;
 	QPushButton *enable_btn;

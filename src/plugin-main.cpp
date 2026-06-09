@@ -19,6 +19,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 #include <util/platform.h>
+#include <QDockWidget>
 #include <QTimer>
 #include <QMainWindow>
 #include "plugin-support.h"
@@ -111,6 +112,13 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	obs_data_t *cfg = obs_data_create_from_json_file(g_config_path);
 	if (!cfg)
 		return;
+
+	bool show_on_start = obs_data_get_bool(cfg, "show_on_start");
+	if (show_on_start) {
+		auto *dock = main_window->findChild<QDockWidget *>("subsplash-scheduler");
+		if (dock)
+			dock->setVisible(true);
+	}
 
 	bool enabled = obs_data_get_bool(cfg, "enabled");
 	if (!enabled) {
