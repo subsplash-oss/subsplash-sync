@@ -13,6 +13,10 @@ class SchedulerPanel : public QWidget {
 public:
 	explicit SchedulerPanel(QWidget *parent = nullptr);
 	~SchedulerPanel() override;
+	SchedulerPanel(const SchedulerPanel &) = delete;
+	SchedulerPanel &operator=(const SchedulerPanel &) = delete;
+	SchedulerPanel(SchedulerPanel &&) = delete;
+	SchedulerPanel &operator=(SchedulerPanel &&) = delete;
 
 	void LoadSettings();
 	void SaveSettings();
@@ -30,11 +34,14 @@ private:
 	QLineEdit *client_secret_edit;
 	QLineEdit *app_key_edit;
 	QSpinBox *poll_interval_spin;
+	QSpinBox *start_lead_spin;
+	QSpinBox *stop_lag_spin;
 	QPushButton *test_btn;
 	QPushButton *save_btn;
 	QPushButton *enable_btn;
 	QLabel *conn_status_label;
 	QLabel *sched_status_label;
-	QLabel *next_bc_label;
+	QLabel *next_broadcast_label;
+	QLabel *last_activity_label;
 	QTimer *status_timer;
 };
