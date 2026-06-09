@@ -113,13 +113,15 @@ long scheduler_consume_action(scheduler_t *scheduler)
 }
 
 void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_len, char *next_broadcast,
-			  size_t next_broadcast_len)
+			  size_t next_broadcast_len, char *last_activity, size_t last_activity_len)
 {
 	pthread_mutex_lock(&scheduler->lock);
 	if (status && status_len > 0)
 		snprintf(status, status_len, "%s", scheduler->status_text);
 	if (next_broadcast && next_broadcast_len > 0)
 		snprintf(next_broadcast, next_broadcast_len, "%s", scheduler->next_broadcast_info);
+	if (last_activity && last_activity_len > 0)
+		snprintf(last_activity, last_activity_len, "%s", scheduler->last_activity);
 	pthread_mutex_unlock(&scheduler->lock);
 }
 
@@ -169,11 +171,22 @@ static void *scheduler_thread_func(void *arg)
 
 static void set_status(scheduler_t *scheduler, const char *status, const char *broadcast_info)
 {
+	char time_str[16];
+	time_t now = time(NULL);
+	struct tm local_time;
+#if defined(_WIN32)
+	localtime_s(&local_time, &now);
+#else
+	localtime_r(&now, &local_time);
+#endif
+	strftime(time_str, sizeof(time_str), "%H:%M:%S", &local_time);
+
 	pthread_mutex_lock(&scheduler->lock);
 	snprintf(scheduler->status_text, sizeof(scheduler->status_text), "%s", status);
 	if (broadcast_info) {
 		snprintf(scheduler->next_broadcast_info, sizeof(scheduler->next_broadcast_info), "%s", broadcast_info);
 	}
+	snprintf(scheduler->last_activity, sizeof(scheduler->last_activity), "[%s] %s", time_str, status);
 	pthread_mutex_unlock(&scheduler->lock);
 }
 

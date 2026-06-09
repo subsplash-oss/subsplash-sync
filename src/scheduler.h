@@ -58,6 +58,7 @@ typedef struct {
 	/* UI-visible status strings. */
 	char status_text[256];
 	char next_broadcast_info[256];
+	char last_activity[256];
 
 	pthread_cond_t stop_cond;
 	pthread_mutex_t stop_mutex;
@@ -72,7 +73,7 @@ void scheduler_stop(scheduler_t *scheduler);
 void scheduler_destroy(scheduler_t *scheduler);
 long scheduler_consume_action(scheduler_t *scheduler);
 void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_len, char *next_broadcast,
-			  size_t next_broadcast_len);
+			  size_t next_broadcast_len, char *last_activity, size_t last_activity_len);
 
 #ifdef __cplusplus
 }

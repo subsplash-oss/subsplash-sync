@@ -42,10 +42,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Threads::Threads)
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE src/plugin-main.cpp
-          src/subsplash-api.c
-          src/scheduler.c
-          src/scheduler-panel.cpp
+  PRIVATE src/plugin-main.cpp src/subsplash-api.c src/scheduler.c src/scheduler-panel.cpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
