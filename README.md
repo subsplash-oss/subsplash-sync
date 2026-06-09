@@ -67,6 +67,19 @@ cmake --build --preset windows-x64
 See the [OBS Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki)
 for detailed build instructions and prerequisites.
 
+### Running Tests
+
+Unit tests live in the `tests/` directory and can be built standalone
+without the OBS SDK. CMocka and cJSON are fetched automatically via
+CMake `FetchContent`.
+
+```bash
+cd tests
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
 ### Dependencies
 
 - **libobs** and **obs-frontend-api** — provided by the OBS SDK
@@ -107,7 +120,8 @@ launches if it was previously enabled.
 | `src/plugin-main.cpp` | C++ | Module init, tools menu, config persistence, action timer |
 | `src/subsplash-api.c/h` | C | libcurl HTTP client for Subsplash auth + broadcast API |
 | `src/scheduler.c/h` | C | Background poll thread with atomic action signaling |
-| `src/settings-dialog.cpp/hpp` | C++ | Qt dialog for credentials, settings, and status |
+| `src/scheduler-panel.cpp/hpp` | C++ | Qt dock panel for credentials, settings, and status |
+| `tests/` | C | Unit tests (CMocka) for scheduler and API logic |
 
 ### Thread Safety
 

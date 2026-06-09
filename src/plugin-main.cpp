@@ -108,6 +108,10 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	auto *panel = new SchedulerPanel(main_window);
 	obs_frontend_add_dock_by_id("subsplash-scheduler", "Subsplash Live Scheduler", panel);
 
+	auto *dock = main_window->findChild<QDockWidget *>("subsplash-scheduler");
+	if (dock)
+		dock->setVisible(true);
+
 	/* Auto-start scheduler if previously enabled */
 	obs_data_t *cfg = obs_data_create_from_json_file(g_config_path);
 	if (!cfg)
