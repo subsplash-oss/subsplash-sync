@@ -276,7 +276,9 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		 * If we started streaming for the previous broadcast but
 		 * never stopped, we owe a clean disconnect so the backend
 		 * closes the old session before we connect for the new
-		 * event.
+		 * event.  Return immediately so the RESTART action isn't
+		 * overwritten by a START for the new broadcast in the
+		 * same poll cycle.
 		 */
 		if (scheduler->acted_started && !scheduler->acted_stopped) {
 			obs_log(LOG_INFO,
@@ -284,13 +286,21 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 				"signaling RESTART",
 				scheduler->acted_broadcast_id, broadcast.id);
 			__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_RESTART);
-			scheduler->acted_stopped = true;
 		}
 
 		scheduler->acted_started = false;
 		scheduler->acted_stopped = false;
 		snprintf(scheduler->acted_broadcast_id, sizeof(scheduler->acted_broadcast_id), "%s", broadcast.id);
+		scheduler->cached_end_epoch = broadcast.end_epoch;
 		obs_log(LOG_INFO, "Now tracking broadcast %s", broadcast.id);
+
+		if (__sync_fetch_and_add(&scheduler->action, 0) == SCHED_ACTION_RESTART) {
+			char broadcast_info[256];
+			snprintf(broadcast_info, sizeof(broadcast_info), "%s to %s [%s]%s", broadcast.start_at,
+				 broadcast.end_at, broadcast.status, broadcast.simulated_live ? " (simulated)" : "");
+			set_status(scheduler, "Transitioning", broadcast_info);
+			return;
+		}
 	}
 
 	scheduler->cached_end_epoch = broadcast.end_epoch;
