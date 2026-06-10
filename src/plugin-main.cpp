@@ -44,9 +44,15 @@ static QTimer *g_action_timer = nullptr;
 
 /*
  * Restart state machine: after a RESTART action we stop the stream,
- * wait for OBS_FRONTEND_EVENT_STREAMING_STOPPED (full cleanup) plus a safety delay, then start again.
+ * wait for OBS_FRONTEND_EVENT_STREAMING_STOPPED (full cleanup) plus
+ * a safety delay, then start again.  Polling
+ * obs_frontend_streaming_active() alone isn't safe -- OBS flips that
+ * flag before the RTMP connect thread has exited, and starting a new
+ * stream while the old thread is still tearing down causes a crash
+ * inside obs-outputs (null-pointer memmove in the connect thread).
  */
 static bool g_restart_pending = false;
+static bool g_restart_stream_fully_stopped = false;
 static time_t g_restart_stop_time = 0;
 
 /* Exposed to scheduler-panel.cpp via extern "C" */
@@ -65,11 +71,15 @@ static void on_action_tick()
 		return;
 
 	if (g_restart_pending) {
-		bool stream_stopped = !obs_frontend_streaming_active();
+		if (!g_restart_stream_fully_stopped)
+			return;
+
 		bool delay_elapsed = (time(NULL) - g_restart_stop_time) >= SCHED_RESTART_DELAY_SEC;
 
-		if (stream_stopped && delay_elapsed) {
+		if (delay_elapsed) {
 			g_restart_pending = false;
+			g_restart_stream_fully_stopped = false;
+			scheduler_consume_action(&g_scheduler);
 			obs_frontend_streaming_start();
 			obs_log(LOG_INFO, "Auto-started streaming after restart delay");
 		}
@@ -86,10 +96,11 @@ static void on_action_tick()
 	} else if (action == SCHED_ACTION_RESTART) {
 		obs_frontend_streaming_stop();
 		g_restart_pending = true;
+		g_restart_stream_fully_stopped = false;
 		g_restart_stop_time = time(NULL);
 		obs_log(LOG_INFO,
 			"Auto-stopped streaming for broadcast transition, "
-			"will restart in %ds",
+			"will restart in %ds after cleanup completes",
 			SCHED_RESTART_DELAY_SEC);
 	}
 }
@@ -100,6 +111,12 @@ static void on_action_tick()
 
 static void on_frontend_event(enum obs_frontend_event event, void *)
 {
+	if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPED && g_restart_pending) {
+		g_restart_stream_fully_stopped = true;
+		g_restart_stop_time = time(NULL);
+		obs_log(LOG_INFO, "Stream fully stopped, restart delay begins now");
+	}
+
 	if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
 		return;
 
