@@ -1,18 +1,90 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/ee/user/application_security/sast/#customizing-the-sast-settings
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure
-# Dependency Scanning customization: https://docs.gitlab.com/ee/user/application_security/dependency_scanning/#customizing-the-dependency-scanning-settings
-# Container Scanning customization: https://docs.gitlab.com/ee/user/application_security/container_scanning/#customizing-the-container-scanning-settings
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ee/ci/variables/#cicd-variable-precedence
 stages:
-- test
-- secret-detection
-sast:
-  stage: test
+  - test
+  - secret-detection
+
 include:
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
 variables:
-  SECRET_DETECTION_ENABLED: 'true'
+  SECRET_DETECTION_ENABLED: "true"
+
 secret_detection:
   stage: secret-detection
+
+# ---------------------------------------------------------------------------
+# Unit tests with coverage -- gcov instrumentation + Cobertura for MR diffs
+# ---------------------------------------------------------------------------
+test:unit:
+  stage: test
+  image: ubuntu:24.04
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends cmake make gcc g++ git ca-certificates python3-pip
+    - python3 -m pip install --break-system-packages gcovr
+  script:
+    - cd tests
+    - cmake -B build -DCMAKE_C_FLAGS="--coverage" -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+    - cmake --build build --parallel
+    - ctest --test-dir build --output-on-failure
+    - gcovr build --root .. --filter '../src/' --xml -o coverage.xml
+    - gcovr build --root .. --filter '../src/'
+  coverage: '/^TOTAL\s+\S+\s+\S+\s+(\d+(?:\.\d+)?)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: tests/coverage.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# clang-format 19.1.1 -- pip provides the exact version the script requires.
+# Only checks files changed in the MR (matches the GHA behavior).
+# ---------------------------------------------------------------------------
+lint:clang-format:
+  stage: test
+  image: ubuntu:24.04
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    GIT_DEPTH: 0
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends zsh python3-pip git ca-certificates
+    - python3 -m pip install --break-system-packages clang-format==19.1.1
+  script:
+    - |
+      CHANGED=$(git diff --name-only --diff-filter=ACM "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.m' '*.mm' || true)
+      if [ -n "$CHANGED" ]; then
+        zsh build-aux/run-clang-format --check --fail-error $CHANGED
+      else
+        echo "No C/C++ files changed -- skipping"
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# gersemi >= 0.12.0 -- only checks CMake files changed in the MR.
+# ---------------------------------------------------------------------------
+lint:gersemi:
+  stage: test
+  image: ubuntu:24.04
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    GIT_DEPTH: 0
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends zsh python3-pip python3-venv git ca-certificates
+    - python3 -m pip install --break-system-packages "gersemi>=0.12.0"
+  script:
+    - |
+      CHANGED=$(git diff --name-only --diff-filter=ACM "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA" -- '*.cmake' '*CMakeLists.txt' || true)
+      if [ -n "$CHANGED" ]; then
+        zsh build-aux/run-gersemi --check --fail-error $CHANGED
+      else
+        echo "No CMake files changed -- skipping"
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
