@@ -119,9 +119,10 @@ void SchedulerPanel::SetupUI()
 
 	/* ---- Status ---- */
 	auto *status_group = new QGroupBox(T("Status.Title"), this);
-	auto *status_form = new QFormLayout;
-	status_form->setContentsMargins(6, 0, 6, 4);
-	status_form->setVerticalSpacing(2);
+	auto *status_grid = new QGridLayout;
+	status_grid->setContentsMargins(6, 0, 6, 4);
+	status_grid->setVerticalSpacing(2);
+	status_grid->setColumnStretch(1, 1);
 
 	conn_status_label = new QLabel(T("Status.Unknown"), this);
 	sched_status_label = new QLabel(T("Status.Stopped"), this);
@@ -132,11 +133,16 @@ void SchedulerPanel::SetupUI()
 	last_activity_label->setWordWrap(true);
 	last_activity_label->setMinimumHeight(last_activity_label->fontMetrics().lineSpacing() * 2);
 
-	status_form->addRow(T("Status.Connection"), conn_status_label);
-	status_form->addRow(T("Status.Scheduler"), sched_status_label);
-	status_form->addRow(T("Status.NextBroadcast"), next_broadcast_label);
-	status_form->addRow(T("Status.LastActivity"), last_activity_label);
-	status_group->setLayout(status_form);
+	status_grid->addWidget(new QLabel(T("Status.Connection"), this), 0, 0, Qt::AlignRight);
+	status_grid->addWidget(conn_status_label, 0, 1);
+	status_grid->addWidget(new QLabel(T("Status.Scheduler"), this), 1, 0, Qt::AlignRight);
+	status_grid->addWidget(sched_status_label, 1, 1);
+	status_grid->addWidget(new QLabel(T("Status.NextBroadcast"), this), 2, 0, Qt::AlignRight | Qt::AlignTop);
+	next_broadcast_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+	status_grid->addWidget(next_broadcast_label, 2, 1, Qt::AlignTop);
+	status_grid->addWidget(new QLabel(T("Status.LastActivity"), this), 3, 0, Qt::AlignRight);
+	status_grid->addWidget(last_activity_label, 3, 1);
+	status_group->setLayout(status_grid);
 	main_layout->addWidget(status_group);
 
 	main_layout->addStretch();
