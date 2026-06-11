@@ -236,6 +236,20 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 	subsplash_broadcast_t broadcast;
 	int fetch_result = subsplash_client_fetch_broadcasts(&scheduler->api, &broadcast);
 
+	if (fetch_result == SUBSPLASH_FETCH_AUTH_ERROR) {
+		scheduler->consecutive_failures++;
+		obs_log(LOG_WARNING, "subsplash: not authorized (attempt %d), backing off",
+			scheduler->consecutive_failures);
+
+		/*
+		 * Failure-open: keep existing state and check cached
+		 * end time so STOP still fires if scheduled.
+		 */
+		check_cached_stop(scheduler, time(NULL));
+		set_status(scheduler, "Not authorized", "Check client role and app key");
+		return;
+	}
+
 	if (fetch_result == SUBSPLASH_FETCH_API_ERROR) {
 		scheduler->consecutive_failures++;
 		obs_log(LOG_WARNING, "subsplash: API error (attempt %d), backing off", scheduler->consecutive_failures);

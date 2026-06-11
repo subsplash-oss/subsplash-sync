@@ -126,14 +126,13 @@ static void test_curl_write_cb_empty(void **state)
 static void test_parse_broadcast_json_full(void **state)
 {
 	(void)state;
-	const char *json =
-		"{"
-		"  \"id\": \"abc-123\","
-		"  \"start_at\": \"2026-06-08T10:00:00Z\","
-		"  \"end_at\": \"2026-06-08T11:00:00Z\","
-		"  \"status\": \"scheduled\","
-		"  \"simulated_live\": false"
-		"}";
+	const char *json = "{"
+			   "  \"id\": \"abc-123\","
+			   "  \"start_at\": \"2026-06-08T10:00:00Z\","
+			   "  \"end_at\": \"2026-06-08T11:00:00Z\","
+			   "  \"status\": \"scheduled\","
+			   "  \"simulated_live\": false"
+			   "}";
 
 	obs_data_t *obj = obs_data_create_from_json(json);
 	assert_non_null(obj);
@@ -158,14 +157,13 @@ static void test_parse_broadcast_json_full(void **state)
 static void test_parse_broadcast_json_simulated(void **state)
 {
 	(void)state;
-	const char *json =
-		"{"
-		"  \"id\": \"sim-1\","
-		"  \"start_at\": \"2026-06-08T10:00:00Z\","
-		"  \"end_at\": \"2026-06-08T11:00:00Z\","
-		"  \"status\": \"live\","
-		"  \"simulated_live\": true"
-		"}";
+	const char *json = "{"
+			   "  \"id\": \"sim-1\","
+			   "  \"start_at\": \"2026-06-08T10:00:00Z\","
+			   "  \"end_at\": \"2026-06-08T11:00:00Z\","
+			   "  \"status\": \"live\","
+			   "  \"simulated_live\": true"
+			   "}";
 
 	obs_data_t *obj = obs_data_create_from_json(json);
 	assert_non_null(obj);
@@ -202,6 +200,169 @@ static void test_parse_broadcast_json_missing_fields(void **state)
 }
 
 /* ================================================================== */
+/* HTTP status code / auth error tests                                */
+/*                                                                    */
+/* Each test enqueues canned curl responses: first an auth token      */
+/* (always 200), then the broadcasts response with the HTTP code      */
+/* under test.                                                        */
+/* ================================================================== */
+
+static const char *fake_token_json = "{\"access_token\":\"tok\",\"expires_in\":3600}";
+
+static void init_client(subsplash_client_t *c)
+{
+	subsplash_client_init(c, "https://test.example.com", "cid", "csecret", "MYAPP");
+	c->token_expiry = 0;
+}
+
+static void test_fetch_broadcasts_returns_auth_error_on_401(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(401, "{\"code\":\"authorization\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_AUTH_ERROR);
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_clears_token_on_401(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(401, "{\"code\":\"unauthorized\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_AUTH_ERROR);
+	assert_int_equal(client.access_token[0], '\0');
+	assert_int_equal(client.token_expiry, 0);
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_keeps_token_on_403(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(403, "{\"code\":\"authorization\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_AUTH_ERROR);
+	assert_true(client.access_token[0] != '\0');
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_returns_auth_error_on_403(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(403, "{\"code\":\"authorization\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_AUTH_ERROR);
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_returns_api_error_on_500(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(500, "{\"code\":\"internal\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_API_ERROR);
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_returns_ok_on_200(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(200, "{\"_embedded\":{\"broadcasts\":["
+				   "{\"id\":\"b1\",\"start_at\":\"2026-06-08T10:00:00Z\","
+				   "\"end_at\":\"2026-06-08T11:00:00Z\",\"status\":\"scheduled\","
+				   "\"simulated_live\":false}"
+				   "]}}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_OK);
+	assert_true(b.valid);
+	assert_string_equal(b.id, "b1");
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_by_id_returns_auth_error_on_403(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(403, "{\"code\":\"authorization\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_by_id(&client, "some-id", &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_AUTH_ERROR);
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_test_connection_surfaces_auth_error(void **state)
+{
+	(void)state;
+	stub_reset();
+	/* First pair: authenticate + fetch_broadcasts (inside test_connection) */
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(403, "{\"code\":\"authorization\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	char status[256] = {0};
+	bool ok = subsplash_client_test_connection(&client, status, sizeof(status));
+	assert_false(ok);
+	assert_non_null(strstr(status, "not authorized"));
+
+	subsplash_client_destroy(&client);
+}
+
+/* ================================================================== */
 /* main                                                               */
 /* ================================================================== */
 
@@ -222,6 +383,15 @@ int main(void)
 		cmocka_unit_test(test_parse_broadcast_json_full),
 		cmocka_unit_test(test_parse_broadcast_json_simulated),
 		cmocka_unit_test(test_parse_broadcast_json_missing_fields),
+		/* HTTP status / auth errors */
+		cmocka_unit_test(test_fetch_broadcasts_returns_auth_error_on_401),
+		cmocka_unit_test(test_fetch_broadcasts_clears_token_on_401),
+		cmocka_unit_test(test_fetch_broadcasts_keeps_token_on_403),
+		cmocka_unit_test(test_fetch_broadcasts_returns_auth_error_on_403),
+		cmocka_unit_test(test_fetch_broadcasts_returns_api_error_on_500),
+		cmocka_unit_test(test_fetch_broadcasts_returns_ok_on_200),
+		cmocka_unit_test(test_fetch_by_id_returns_auth_error_on_403),
+		cmocka_unit_test(test_test_connection_surfaces_auth_error),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);
