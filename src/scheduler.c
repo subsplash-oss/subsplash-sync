@@ -166,6 +166,21 @@ static void *scheduler_thread_func(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
+/* Format a UTC epoch as a local-time string for the UI.              */
+/* ------------------------------------------------------------------ */
+
+static void format_local_time(time_t epoch, char *buf, size_t buf_size)
+{
+	struct tm local_time;
+#if defined(_WIN32)
+	localtime_s(&local_time, &epoch);
+#else
+	localtime_r(&epoch, &local_time);
+#endif
+	strftime(buf, buf_size, "%Y-%m-%d %H:%M", &local_time);
+}
+
+/* ------------------------------------------------------------------ */
 /* Helper: update UI status strings under the lock.                   */
 /* ------------------------------------------------------------------ */
 
@@ -295,9 +310,12 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		obs_log(LOG_INFO, "Now tracking broadcast %s", broadcast.id);
 
 		if (__sync_fetch_and_add(&scheduler->action, 0) == SCHED_ACTION_RESTART) {
+			char start_local[32], end_local[32];
+			format_local_time(broadcast.start_epoch, start_local, sizeof(start_local));
+			format_local_time(broadcast.end_epoch, end_local, sizeof(end_local));
 			char broadcast_info[256];
-			snprintf(broadcast_info, sizeof(broadcast_info), "%s to %s [%s]%s", broadcast.start_at,
-				 broadcast.end_at, broadcast.status, broadcast.simulated_live ? " (simulated)" : "");
+			snprintf(broadcast_info, sizeof(broadcast_info), "%s to %s [%s]%s", start_local, end_local,
+				 broadcast.status, broadcast.simulated_live ? " (simulated)" : "");
 			set_status(scheduler, "Transitioning", broadcast_info);
 			return;
 		}
@@ -351,8 +369,11 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		scheduler->acted_stopped = true;
 	}
 
+	char start_local[32], end_local[32];
+	format_local_time(broadcast.start_epoch, start_local, sizeof(start_local));
+	format_local_time(broadcast.end_epoch, end_local, sizeof(end_local));
 	char broadcast_info[256];
-	snprintf(broadcast_info, sizeof(broadcast_info), "%s to %s [%s]%s", broadcast.start_at, broadcast.end_at,
-		 broadcast.status, broadcast.simulated_live ? " (simulated)" : "");
+	snprintf(broadcast_info, sizeof(broadcast_info), "%s to %s [%s]%s", start_local, end_local, broadcast.status,
+		 broadcast.simulated_live ? " (simulated)" : "");
 	set_status(scheduler, "Monitoring", broadcast_info);
 }
