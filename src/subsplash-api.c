@@ -129,7 +129,8 @@ static void parse_broadcast_json(obs_data_t *broadcast_obj, subsplash_broadcast_
 /* Perform an authenticated GET request and return the response body. */
 /* ------------------------------------------------------------------ */
 
-static CURLcode perform_authenticated_get(subsplash_client_t *client, const char *url, struct curl_buf *response)
+static CURLcode perform_authenticated_get(subsplash_client_t *client, const char *url, struct curl_buf *response,
+					  long *out_http_code)
 {
 	CURL *curl = curl_easy_init();
 	if (!curl)
@@ -149,6 +150,9 @@ static CURLcode perform_authenticated_get(subsplash_client_t *client, const char
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
 
 	CURLcode result = curl_easy_perform(curl);
+
+	if (result == CURLE_OK && out_http_code)
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, out_http_code);
 
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
@@ -323,10 +327,33 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 	curl_easy_cleanup(escape_handle);
 
 	struct curl_buf response = {NULL, 0};
-	CURLcode curl_result = perform_authenticated_get(client, url, &response);
+	long http_code = 0;
+	CURLcode curl_result = perform_authenticated_get(client, url, &response, &http_code);
 
 	if (curl_result != CURLE_OK || !response.data) {
 		obs_log(LOG_WARNING, "subsplash: fetch broadcasts failed: %s", curl_easy_strerror(curl_result));
+		free(response.data);
+		return SUBSPLASH_FETCH_API_ERROR;
+	}
+
+	if (http_code == 401) {
+		obs_log(LOG_WARNING, "subsplash: broadcasts request returned HTTP 401 (token rejected)");
+		pthread_mutex_lock(&client->token_lock);
+		client->access_token[0] = '\0';
+		client->token_expiry = 0;
+		pthread_mutex_unlock(&client->token_lock);
+		free(response.data);
+		return SUBSPLASH_FETCH_AUTH_ERROR;
+	}
+
+	if (http_code == 403) {
+		obs_log(LOG_WARNING, "subsplash: broadcasts request returned HTTP 403 (not authorized for app key)");
+		free(response.data);
+		return SUBSPLASH_FETCH_AUTH_ERROR;
+	}
+
+	if (http_code < 200 || http_code >= 300) {
+		obs_log(LOG_WARNING, "subsplash: broadcasts request returned HTTP %ld", http_code);
 		free(response.data);
 		return SUBSPLASH_FETCH_API_ERROR;
 	}
@@ -341,7 +368,7 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 
 	obs_data_t *embedded = obs_data_get_obj(json, "_embedded");
 	if (!embedded) {
-		obs_log(LOG_INFO, "subsplash: no _embedded object in response");
+		obs_log(LOG_INFO, "subsplash: broadcasts response contained no results");
 		obs_data_release(json);
 		return SUBSPLASH_FETCH_NO_DATA;
 	}
@@ -381,13 +408,15 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 
 	obs_data_array_release(broadcasts);
 	obs_data_release(embedded);
-	obs_data_release(json);
 
-	if (!chosen)
+	if (!chosen) {
+		obs_data_release(json);
 		return SUBSPLASH_FETCH_NO_DATA;
+	}
 
 	parse_broadcast_json(chosen, out);
 	obs_data_release(chosen);
+	obs_data_release(json);
 
 	obs_log(LOG_INFO, "subsplash: broadcast id=%s start=%s end=%s status=%s simulated_live=%s", out->id,
 		out->start_at, out->end_at, out->status, out->simulated_live ? "true" : "false");
@@ -414,10 +443,33 @@ int subsplash_client_fetch_by_id(subsplash_client_t *client, const char *id, sub
 	snprintf(url, sizeof(url), "%s/live/v1/broadcasts/%s", client->base_url, id);
 
 	struct curl_buf response = {NULL, 0};
-	CURLcode curl_result = perform_authenticated_get(client, url, &response);
+	long http_code = 0;
+	CURLcode curl_result = perform_authenticated_get(client, url, &response, &http_code);
 
 	if (curl_result != CURLE_OK || !response.data) {
 		obs_log(LOG_WARNING, "subsplash: fetch broadcast %s failed: %s", id, curl_easy_strerror(curl_result));
+		free(response.data);
+		return SUBSPLASH_FETCH_API_ERROR;
+	}
+
+	if (http_code == 401) {
+		obs_log(LOG_WARNING, "subsplash: broadcast %s returned HTTP 401 (token rejected)", id);
+		pthread_mutex_lock(&client->token_lock);
+		client->access_token[0] = '\0';
+		client->token_expiry = 0;
+		pthread_mutex_unlock(&client->token_lock);
+		free(response.data);
+		return SUBSPLASH_FETCH_AUTH_ERROR;
+	}
+
+	if (http_code == 403) {
+		obs_log(LOG_WARNING, "subsplash: broadcast %s returned HTTP 403 (not authorized for app key)", id);
+		free(response.data);
+		return SUBSPLASH_FETCH_AUTH_ERROR;
+	}
+
+	if (http_code < 200 || http_code >= 300) {
+		obs_log(LOG_WARNING, "subsplash: broadcast %s request returned HTTP %ld", id, http_code);
 		free(response.data);
 		return SUBSPLASH_FETCH_API_ERROR;
 	}
@@ -458,7 +510,12 @@ bool subsplash_client_test_connection(subsplash_client_t *client, char *status_o
 	subsplash_broadcast_t broadcast;
 	int result = subsplash_client_fetch_broadcasts(client, &broadcast);
 
-	if (result == SUBSPLASH_FETCH_OK && broadcast.valid) {
+	if (result == SUBSPLASH_FETCH_AUTH_ERROR) {
+		snprintf(status_out, status_len,
+			 "Authenticated, but not authorized to read broadcasts. "
+			 "Token may not have the correct role for this app key.");
+		return false;
+	} else if (result == SUBSPLASH_FETCH_OK && broadcast.valid) {
 		snprintf(status_out, status_len, "Connected. Next broadcast: %s", broadcast.start_at);
 	} else {
 		snprintf(status_out, status_len, "Connected. No upcoming broadcasts.");

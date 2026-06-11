@@ -27,6 +27,10 @@ typedef enum {
 	CURLOPT_POSTFIELDS = 10015,
 } CURLoption;
 
+typedef enum {
+	CURLINFO_RESPONSE_CODE = 0x200002,
+} CURLINFO;
+
 struct curl_slist {
 	char *data;
 	struct curl_slist *next;
@@ -36,9 +40,18 @@ CURL *curl_easy_init(void);
 void curl_easy_cleanup(CURL *curl);
 CURLcode curl_easy_setopt(CURL *curl, CURLoption option, ...);
 CURLcode curl_easy_perform(CURL *curl);
+CURLcode curl_easy_getinfo(CURL *curl, CURLINFO info, ...);
 char *curl_easy_escape(CURL *curl, const char *string, int length);
 const char *curl_easy_strerror(CURLcode code);
 void curl_free(void *p);
-struct curl_slist *curl_slist_append(struct curl_slist *list,
-				     const char *string);
+struct curl_slist *curl_slist_append(struct curl_slist *list, const char *string);
 void curl_slist_free_all(struct curl_slist *list);
+
+/* ------------------------------------------------------------------ */
+/* Test helpers: enqueue canned HTTP responses for curl_easy_perform.  */
+/* ------------------------------------------------------------------ */
+
+#define STUB_MAX_RESPONSES 8
+
+void stub_reset(void);
+void stub_enqueue_response(long http_code, const char *body);

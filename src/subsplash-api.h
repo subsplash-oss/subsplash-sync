@@ -36,9 +36,10 @@ typedef struct {
 } subsplash_broadcast_t;
 
 /* Fetch result codes returned alongside the broadcast struct. */
-#define SUBSPLASH_FETCH_OK        0
-#define SUBSPLASH_FETCH_API_ERROR 1
-#define SUBSPLASH_FETCH_NO_DATA   2
+#define SUBSPLASH_FETCH_OK         0
+#define SUBSPLASH_FETCH_API_ERROR  1
+#define SUBSPLASH_FETCH_NO_DATA    2
+#define SUBSPLASH_FETCH_AUTH_ERROR 3
 
 bool subsplash_client_init(subsplash_client_t *client, const char *base_url, const char *client_id,
 			   const char *client_secret, const char *app_key);
