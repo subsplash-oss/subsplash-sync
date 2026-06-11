@@ -147,6 +147,10 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 		return;
 	}
 
+	obs_data_set_default_int(cfg, "poll_interval", 30);
+	obs_data_set_default_int(cfg, "start_lead", SCHED_DEFAULT_START_LEAD_MINUTES);
+	obs_data_set_default_int(cfg, "stop_lag", SCHED_DEFAULT_STOP_LAG_MINUTES);
+
 	const char *client_id = obs_data_get_string(cfg, "client_id");
 	const char *client_secret = obs_data_get_string(cfg, "client_secret");
 	const char *app_key = obs_data_get_string(cfg, "app_key");
@@ -160,8 +164,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 
 	if (client_id[0] != '\0' && client_secret[0] != '\0' && app_key[0] != '\0') {
 		scheduler_configure(&g_scheduler, base_url, client_id, client_secret, app_key, poll > 0 ? poll : 30,
-				    start_lead > 0 ? start_lead : SCHED_DEFAULT_START_LEAD_MINUTES,
-				    stop_lag > 0 ? stop_lag : SCHED_DEFAULT_STOP_LAG_MINUTES);
+				    start_lead, stop_lag);
 		scheduler_start(&g_scheduler);
 		g_scheduler_enabled = true;
 		obs_log(LOG_INFO, "Auto-started scheduler from saved config");
