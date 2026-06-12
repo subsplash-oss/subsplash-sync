@@ -10,6 +10,8 @@
 
 typedef void CURL;
 
+typedef long long curl_off_t;
+
 typedef enum {
 	CURLE_OK = 0,
 	CURLE_FAILED_INIT = 2,
@@ -25,6 +27,11 @@ typedef enum {
 	CURLOPT_TIMEOUT = 13,
 	CURLOPT_POST = 47,
 	CURLOPT_POSTFIELDS = 10015,
+	CURLOPT_NOPROGRESS = 43,
+	CURLOPT_CONNECTTIMEOUT = 78,
+	CURLOPT_NOSIGNAL = 99,
+	CURLOPT_XFERINFODATA = 10057,
+	CURLOPT_XFERINFOFUNCTION = 20219,
 } CURLoption;
 
 typedef enum {
