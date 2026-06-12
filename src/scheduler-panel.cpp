@@ -8,8 +8,14 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QMessageBox>
+#include <QDockWidget>
+#include <QPointer>
+#include <QCoreApplication>
 #include <obs-module.h>
 #include <obs-frontend-api.h>
+
+#include <string>
+#include <thread>
 
 #define T(key) obs_module_text(key)
 
@@ -32,12 +38,25 @@ SchedulerPanel::SchedulerPanel(QWidget *parent) : QWidget(parent)
 	status_timer->setInterval(1000);
 	connect(status_timer, &QTimer::timeout, this, &SchedulerPanel::OnStatusTick);
 
+	/* Debounced auto-save: a field edit (re)starts this timer, so we save
+	 * shortly after the user stops typing instead of relying solely on
+	 * focus-out (which a NoFocus fold header can't trigger). */
+	autosave_timer = new QTimer(this);
+	autosave_timer->setSingleShot(true);
+	/* Idle window before an autosave fires. Long enough that deliberately
+	 * typing an unfamiliar credential char-by-char doesn't trigger a save
+	 * (and a connection probe) mid-entry; blur/Enter still flushes
+	 * immediately via editingFinished, so nothing is lost. */
+	autosave_timer->setInterval(1500);
+	connect(autosave_timer, &QTimer::timeout, this, &SchedulerPanel::OnFieldChanged);
+
 	LoadSettings();
 	status_timer->start();
 }
 
 SchedulerPanel::~SchedulerPanel()
 {
+	FlushAutosave();
 	status_timer->stop();
 }
 
@@ -49,11 +68,11 @@ void SchedulerPanel::SetupUI()
 	main_layout->setContentsMargins(6, 6, 6, 6);
 	main_layout->setSpacing(4);
 
-	/* ---- API Credentials ---- */
-	auto *cred_group = new QGroupBox(T("Credentials.Title"), this);
-	auto *cred_form = new QFormLayout;
+	/* ---- API Credentials (collapsible) ---- */
+	cred_container = new QWidget(this);
+	auto *cred_form = new QFormLayout(cred_container);
 	cred_form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-	cred_form->setContentsMargins(6, 0, 6, 4);
+	cred_form->setContentsMargins(12, 0, 6, 4);
 	cred_form->setVerticalSpacing(4);
 
 	client_id_edit = new QLineEdit(this);
@@ -61,17 +80,40 @@ void SchedulerPanel::SetupUI()
 	client_secret_edit->setEchoMode(QLineEdit::Password);
 	app_key_edit = new QLineEdit(this);
 	app_key_edit->setMaxLength(6);
+	/* Valid app keys are always uppercase; force-uppercase keystrokes and
+	 * pastes so a lowercase entry can't silently fail with "authenticated,
+	 * but not authorized to read broadcasts". setText() emits textChanged
+	 * (not textEdited), so this never re-triggers autosave; the guard stops
+	 * the recursion. */
+	connect(app_key_edit, &QLineEdit::textChanged, this, [this](const QString &text) {
+		const QString upper = text.toUpper();
+		if (upper != text) {
+			const int pos = app_key_edit->cursorPosition();
+			app_key_edit->blockSignals(true);
+			app_key_edit->setText(upper);
+			app_key_edit->setCursorPosition(pos);
+			app_key_edit->blockSignals(false);
+		}
+	});
 
 	cred_form->addRow(T("Credentials.ClientId"), client_id_edit);
 	cred_form->addRow(T("Credentials.ClientSecret"), client_secret_edit);
 	cred_form->addRow(T("Credentials.AppKey"), app_key_edit);
-	cred_group->setLayout(cred_form);
-	main_layout->addWidget(cred_group);
 
-	/* ---- Schedule Settings ---- */
-	auto *sched_group = new QGroupBox(T("Schedule.Title"), this);
-	auto *sched_grid = new QGridLayout;
-	sched_grid->setContentsMargins(6, 0, 6, 4);
+	/* Test Connection lives with the creds -- it's a setup/troubleshoot
+	 * action, so it tucks away with the section during normal operation. */
+	test_btn = new QPushButton(T("Buttons.TestConnection"), cred_container);
+	test_btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	cred_form->addRow(test_btn);
+
+	cred_toggle_btn = MakeCollapsibleHeader("Credentials.Title", cred_container);
+	main_layout->addWidget(cred_toggle_btn);
+	main_layout->addWidget(cred_container);
+
+	/* ---- Schedule Settings (collapsible) ---- */
+	sched_container = new QWidget(this);
+	auto *sched_grid = new QGridLayout(sched_container);
+	sched_grid->setContentsMargins(12, 0, 6, 4);
 	sched_grid->setVerticalSpacing(4);
 
 	start_lead_spin = new QSpinBox(this);
@@ -93,25 +135,25 @@ void SchedulerPanel::SetupUI()
 	sched_grid->addWidget(stop_lag_spin, 1, 1);
 	sched_grid->addWidget(show_on_start_check, 1, 2, 1, 2);
 
-	sched_group->setLayout(sched_grid);
-	main_layout->addWidget(sched_group);
+	sched_toggle_btn = MakeCollapsibleHeader("Schedule.Title", sched_container);
+	main_layout->addWidget(sched_toggle_btn);
+	main_layout->addWidget(sched_container);
 
-	/* ---- Buttons ---- */
-	auto *btn_layout = new QHBoxLayout;
-
-	test_btn = new QPushButton(T("Buttons.TestConnection"), this);
-	save_btn = new QPushButton(T("Buttons.Save"), this);
-	refresh_btn = new QPushButton(T("Buttons.Refresh"), this);
-	refresh_btn->setEnabled(false);
-
-	btn_layout->addWidget(test_btn);
-	btn_layout->addWidget(save_btn);
-	btn_layout->addWidget(refresh_btn);
-	main_layout->addLayout(btn_layout);
-
+	/* ---- Primary actions (always visible, full width) ---- */
 	enable_btn = new QPushButton(T("Buttons.Enable"), this);
 	enable_btn->setCheckable(true);
 	main_layout->addWidget(enable_btn);
+
+	/* Manual "check now" -- only meaningful while the poll thread is alive. */
+	refresh_btn = new QPushButton(T("Buttons.Refresh"), this);
+	refresh_btn->setEnabled(false);
+	main_layout->addWidget(refresh_btn);
+
+	/* Autosave flash on its own thin line so it never steals button width. */
+	autosave_label = new QLabel("", this);
+	autosave_label->setStyleSheet("QLabel { color: #3fb950; font-weight: bold; }");
+	autosave_label->setAlignment(Qt::AlignCenter);
+	main_layout->addWidget(autosave_label);
 
 	/* ---- Status ---- */
 	auto *status_group = new QGroupBox(T("Status.Title"), this);
@@ -120,7 +162,7 @@ void SchedulerPanel::SetupUI()
 	status_grid->setVerticalSpacing(2);
 	status_grid->setColumnStretch(1, 1);
 
-	conn_status_label = new QLabel(T("Status.Unknown"), this);
+	conn_status_label = new QLabel(T("Status.NotConfigured"), this);
 	sched_status_label = new QLabel(T("Status.Stopped"), this);
 	next_broadcast_label = new QLabel(T("Status.NA"), this);
 	next_broadcast_label->setWordWrap(true);
@@ -146,13 +188,139 @@ void SchedulerPanel::SetupUI()
 	setLayout(main_layout);
 
 	connect(test_btn, &QPushButton::clicked, this, &SchedulerPanel::OnTestConnection);
-	connect(save_btn, &QPushButton::clicked, this, &SchedulerPanel::OnSave);
-	connect(refresh_btn, &QPushButton::clicked, this, &SchedulerPanel::OnRefresh);
 	connect(enable_btn, &QPushButton::toggled, this, &SchedulerPanel::OnEnableToggled);
+	connect(refresh_btn, &QPushButton::clicked, this, &SchedulerPanel::OnRefresh);
+
+	/* ---- Auto-save (no Save button) ----
+	 * Edits schedule a debounced save; editingFinished flushes immediately
+	 * on Enter/focus-out; discrete toggles save right away. */
+	connect(client_id_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
+	connect(client_secret_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
+	connect(app_key_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
+	connect(client_id_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
+	connect(client_secret_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
+	connect(app_key_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
+	connect(start_lead_spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &SchedulerPanel::ScheduleAutosave);
+	connect(stop_lag_spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &SchedulerPanel::ScheduleAutosave);
+	connect(start_lead_spin, &QSpinBox::editingFinished, this, &SchedulerPanel::OnFieldChanged);
+	connect(stop_lag_spin, &QSpinBox::editingFinished, this, &SchedulerPanel::OnFieldChanged);
+	connect(show_on_start_check, &QCheckBox::toggled, this, &SchedulerPanel::OnFieldChanged);
+}
+
+QToolButton *SchedulerPanel::MakeCollapsibleHeader(const char *title_key, QWidget *container)
+{
+	auto *btn = new QToolButton(this);
+	btn->setText(T(title_key));
+	btn->setCheckable(true);
+	btn->setChecked(true);
+	btn->setAutoRaise(true);
+	btn->setArrowType(Qt::DownArrow);
+	btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+	btn->setStyleSheet("QToolButton { border: none; font-weight: bold; }");
+	btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+	connect(btn, &QToolButton::toggled, this, [this, btn, container](bool expanded) {
+		/* Commit any in-flight edit before the fold hides the field. */
+		FlushAutosave();
+		container->setVisible(expanded);
+		btn->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+		/* User took manual control -- stop auto-collapsing on them. */
+		initial_collapse_done = true;
+		FitDockToContents();
+	});
+	return btn;
+}
+
+void SchedulerPanel::SetSectionCollapsed(QToolButton *btn, QWidget *container, bool collapsed)
+{
+	btn->blockSignals(true);
+	btn->setChecked(!collapsed);
+	btn->setArrowType(collapsed ? Qt::RightArrow : Qt::DownArrow);
+	btn->blockSignals(false);
+	container->setVisible(!collapsed);
+}
+
+void SchedulerPanel::CollapseConfiguredSections()
+{
+	if (initial_collapse_done)
+		return;
+	SetSectionCollapsed(cred_toggle_btn, cred_container, true);
+	SetSectionCollapsed(sched_toggle_btn, sched_container, true);
+	initial_collapse_done = true;
+	FitDockToContents();
+}
+
+void SchedulerPanel::ScheduleAutosave()
+{
+	if (is_loading)
+		return;
+	autosave_timer->start();
+}
+
+void SchedulerPanel::FlushAutosave()
+{
+	if (autosave_timer->isActive())
+		OnFieldChanged();
+}
+
+/*
+ * Collapsing a section leaves dead space because the dock keeps its old
+ * height (the panel's trailing stretch just absorbs it). Fit the dock to
+ * its contents in both states:
+ *   - Floating: the dock is its own top-level window, so resize() it. The
+ *     OBS main window is never touched.
+ *   - Docked: we must not resize the main window, but briefly clamping the
+ *     dock's maxHeight makes QMainWindow's dock layout reclaim the freed
+ *     space; we then restore the cap so the user can still grow it.
+ * Two timing subtleties:
+ *   1. The dock's cached sizeHint lags a child visibility change by an event
+ *      cycle, so we force a recompute (adjustSize/updateGeometry) and measure
+ *      on a later tick once the layout has settled.
+ *   2. The dock won't shrink below its (stale) minimum via resize() alone, so
+ *      the maxHeight clamp is what actually forces the shrink in both states.
+ */
+void SchedulerPanel::FitDockToContents()
+{
+	QWidget *w = parentWidget();
+	QDockWidget *dock = nullptr;
+	while (w) {
+		dock = qobject_cast<QDockWidget *>(w);
+		if (dock)
+			break;
+		w = w->parentWidget();
+	}
+	if (!dock)
+		return;
+
+	QTimer::singleShot(0, dock, [dock, this]() {
+		/* Invalidate (don't resize) so the sizeHint recomputes after the
+		 * section toggle. adjustSize() would shrink the panel to its
+		 * content width, leaving dead space on the right when docked. */
+		updateGeometry();
+		dock->updateGeometry();
+		QTimer::singleShot(50, dock, [dock]() {
+			int target = dock->sizeHint().height();
+			if (dock->isFloating())
+				dock->resize(dock->width(), target);
+			dock->setMaximumHeight(target);
+			QTimer::singleShot(60, dock, [dock]() { dock->setMaximumHeight(QWIDGETSIZE_MAX); });
+		});
+	});
+}
+
+void SchedulerPanel::FlashAutosaved()
+{
+	autosave_label->setText(QStringLiteral("\u2713 ") + T("Status.Saved"));
+	QTimer::singleShot(2500, this, [this]() { autosave_label->setText(""); });
 }
 
 void SchedulerPanel::LoadSettings()
 {
+	/* Suppress autosave/flash while we push stored values into the widgets;
+	 * setValue()/setChecked() emit valueChanged/toggled that would otherwise
+	 * trigger a spurious "Saved" flash on startup. */
+	is_loading = true;
+
 	const char *path = sched_get_config_path();
 	obs_data_t *data = obs_data_create_from_json_file(path);
 	if (!data)
@@ -172,6 +340,21 @@ void SchedulerPanel::LoadSettings()
 
 	enable_btn->setChecked(g_scheduler_enabled && g_scheduler.running);
 	enable_btn->setText(enable_btn->isChecked() ? T("Buttons.Disable") : T("Buttons.Enable"));
+	refresh_btn->setEnabled(enable_btn->isChecked());
+
+	/* If credentials are already configured, collapse both setup sections to
+	 * reduce clutter (and mild screen-share exposure) and let Status take the
+	 * dock. Empty creds stay expanded so first-time setup is obvious. */
+	if (CredsComplete())
+		CollapseConfiguredSections();
+
+	is_loading = false;
+
+	/* Populate the Connection field with a real result instead of leaving it
+	 * "Unknown". When the scheduler is already running, OnStatusTick reflects
+	 * live health, so only probe here while it's stopped. */
+	if (CredsComplete() && !g_scheduler.running)
+		StartConnectionCheck(false);
 }
 
 void SchedulerPanel::SaveSettings()
@@ -194,28 +377,81 @@ void SchedulerPanel::SaveSettings()
 	obs_log(LOG_INFO, "Settings saved");
 }
 
-void SchedulerPanel::OnTestConnection()
+bool SchedulerPanel::CredsComplete() const
 {
-	subsplash_client_t client;
-	bool ok = subsplash_client_init(&client, DEFAULT_BASE_URL, client_id_edit->text().toUtf8().constData(),
-					client_secret_edit->text().toUtf8().constData(),
-					app_key_edit->text().toUtf8().constData());
+	return !client_id_edit->text().isEmpty() && !client_secret_edit->text().isEmpty() &&
+	       !app_key_edit->text().isEmpty();
+}
 
-	if (!ok) {
-		conn_status_label->setText(T("Status.InitFailed"));
+/*
+ * Authenticate against the API on a background thread and report the real
+ * result in the Connection field, so it never sits at a meaningless
+ * "Unknown". Network I/O must stay off the UI thread or OBS would hang on
+ * startup. A generation counter discards results from superseded checks
+ * (e.g. creds edited again before the previous check returned).
+ */
+void SchedulerPanel::StartConnectionCheck(bool collapse_on_success)
+{
+	if (!CredsComplete()) {
+		conn_status_label->setText(T("Status.NotConfigured"));
 		return;
 	}
 
-	char status_buf[256];
-	bool success = subsplash_client_test_connection(&client, status_buf, sizeof(status_buf));
-	conn_status_label->setText(status_buf);
-	(void)success;
+	conn_status_label->setText(T("Status.Checking"));
 
-	subsplash_client_destroy(&client);
+	const unsigned gen = ++conn_check_gen;
+	QPointer<SchedulerPanel> self(this);
+	const std::string id = client_id_edit->text().toStdString();
+	const std::string secret = client_secret_edit->text().toStdString();
+	const std::string app = app_key_edit->text().toStdString();
+	const QString init_failed = T("Status.InitFailed");
+
+	std::thread([self, gen, id, secret, app, init_failed, collapse_on_success]() {
+		subsplash_client_t client;
+		bool success = false;
+		QString text;
+
+		if (subsplash_client_init(&client, DEFAULT_BASE_URL, id.c_str(), secret.c_str(), app.c_str())) {
+			char status_buf[256];
+			success = subsplash_client_test_connection(&client, status_buf, sizeof(status_buf));
+			text = QString::fromUtf8(status_buf);
+			subsplash_client_destroy(&client);
+		} else {
+			text = init_failed;
+		}
+
+		/* Hop back to the UI thread via qApp. During OBS shutdown
+		 * instance() can already be null, so guard it before posting;
+		 * the QPointer separately guards the panel being destroyed. */
+		auto *app = QCoreApplication::instance();
+		if (!app)
+			return;
+		QMetaObject::invokeMethod(
+			app,
+			[self, gen, text, success, collapse_on_success]() {
+				if (!self || self->conn_check_gen != gen)
+					return;
+				self->conn_status_label->setText(text);
+				if (success && collapse_on_success)
+					self->CollapseConfiguredSections();
+			},
+			Qt::QueuedConnection);
+	}).detach();
 }
 
-void SchedulerPanel::OnSave()
+void SchedulerPanel::OnTestConnection()
 {
+	StartConnectionCheck(true);
+}
+
+void SchedulerPanel::OnFieldChanged()
+{
+	if (is_loading)
+		return;
+
+	/* Cancel any pending debounce so a flush + timeout don't double-save. */
+	autosave_timer->stop();
+
 	SaveSettings();
 
 	if (g_scheduler.running) {
@@ -223,10 +459,13 @@ void SchedulerPanel::OnSave()
 				    client_secret_edit->text().toUtf8().constData(),
 				    app_key_edit->text().toUtf8().constData(), start_lead_spin->value(),
 				    stop_lag_spin->value());
+	} else {
+		/* Re-probe so the Connection field tracks the edited creds. While
+		 * running, the poll thread already drives OnStatusTick. */
+		StartConnectionCheck(false);
 	}
 
-	save_btn->setText(T("Status.Saved"));
-	QTimer::singleShot(2000, this, [this]() { save_btn->setText(T("Buttons.Save")); });
+	FlashAutosaved();
 }
 
 void SchedulerPanel::OnRefresh()
@@ -258,6 +497,10 @@ void SchedulerPanel::OnEnableToggled()
 		enable_btn->setText(T("Buttons.Enable"));
 		refresh_btn->setEnabled(false);
 		obs_log(LOG_INFO, "Scheduler disabled");
+
+		/* Refresh Connection now that the poll thread won't; avoids a
+		 * stale "Streaming"/"Connected" lingering after stop. */
+		StartConnectionCheck(false);
 	}
 }
 
@@ -284,11 +527,19 @@ void SchedulerPanel::OnStatusTick()
 		next_broadcast_label->setText(next_buf);
 		last_activity_label->setText(activity_buf);
 
+		/* Reflect the poll thread's real health rather than assuming
+		 * success: streaming when live, error while the API is failing,
+		 * otherwise connected. */
 		if (obs_frontend_streaming_active()) {
 			conn_status_label->setText(T("Status.Streaming"));
+		} else if (__sync_fetch_and_add(&g_scheduler.consecutive_failures, 0) > 0) {
+			conn_status_label->setText(T("Status.ApiError"));
 		} else {
-			conn_status_label->setText(T("Status.Authenticated"));
+			conn_status_label->setText(T("Status.Connected"));
 		}
+
+		/* Once we're authenticated, collapse the setup sections once. */
+		CollapseConfiguredSections();
 	} else {
 		sched_status_label->setText(T("Status.Stopped"));
 		next_broadcast_label->setText(T("Status.NA"));
