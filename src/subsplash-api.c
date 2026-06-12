@@ -145,6 +145,30 @@ static CURLcode perform_authenticated_get(subsplash_client_t *client, const char
 }
 
 /* ------------------------------------------------------------------ */
+/* Build the URL-encoded form body for the client_credentials token   */
+/* request. client_id and client_secret are percent-encoded so values */
+/* containing reserved characters (& = + %) don't corrupt the body.   */
+/* ------------------------------------------------------------------ */
+
+static bool build_token_post_fields(CURL *curl, char *out, size_t out_size, const char *client_id,
+				    const char *client_secret)
+{
+	char *escaped_id = curl_easy_escape(curl, client_id, 0);
+	char *escaped_secret = curl_easy_escape(curl, client_secret, 0);
+
+	bool ok = false;
+	if (escaped_id && escaped_secret) {
+		int written = snprintf(out, out_size, "client_id=%s&client_secret=%s&grant_type=client_credentials",
+				       escaped_id, escaped_secret);
+		ok = written > 0 && (size_t)written < out_size;
+	}
+
+	curl_free(escaped_id);
+	curl_free(escaped_secret);
+	return ok;
+}
+
+/* ------------------------------------------------------------------ */
 /* subsplash_client_init                                              */
 /* ------------------------------------------------------------------ */
 
@@ -200,13 +224,18 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	char url[SUBSPLASH_MAX_URL + 64];
 	snprintf(url, sizeof(url), "%s/tokens/v1/token", client->base_url);
 
-	char post_fields[SUBSPLASH_MAX_FIELD * 3 + 128];
-	snprintf(post_fields, sizeof(post_fields), "client_id=%s&client_secret=%s&grant_type=client_credentials",
-		 client->client_id, client->client_secret);
-
 	CURL *curl = curl_easy_init();
 	if (!curl) {
 		obs_log(LOG_WARNING, "subsplash: curl_easy_init failed for auth");
+		pthread_mutex_unlock(&client->token_lock);
+		return false;
+	}
+
+	char post_fields[SUBSPLASH_MAX_FIELD * 3 + 128];
+	if (!build_token_post_fields(curl, post_fields, sizeof(post_fields), client->client_id,
+				     client->client_secret)) {
+		obs_log(LOG_WARNING, "subsplash: failed to build auth request body");
+		curl_easy_cleanup(curl);
 		pthread_mutex_unlock(&client->token_lock);
 		return false;
 	}

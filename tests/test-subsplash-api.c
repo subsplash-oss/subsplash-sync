@@ -363,6 +363,39 @@ static void test_test_connection_surfaces_auth_error(void **state)
 }
 
 /* ================================================================== */
+/* build_token_post_fields tests                                      */
+/* ================================================================== */
+
+static void test_build_token_post_fields_plain(void **state)
+{
+	(void)state;
+	char buf[512];
+	bool ok = build_token_post_fields(NULL, buf, sizeof(buf), "abc123", "secretXYZ");
+	assert_true(ok);
+	assert_string_equal(buf, "client_id=abc123&client_secret=secretXYZ&grant_type=client_credentials");
+}
+
+static void test_build_token_post_fields_encodes_special_chars(void **state)
+{
+	(void)state;
+	char buf[512];
+	/* A secret containing & = + % / must be percent-encoded so it
+	 * doesn't corrupt the form body and silently break auth. */
+	bool ok = build_token_post_fields(NULL, buf, sizeof(buf), "client&id", "se=cr+et%/");
+	assert_true(ok);
+	assert_string_equal(buf,
+			    "client_id=client%26id&client_secret=se%3Dcr%2Bet%25%2F&grant_type=client_credentials");
+}
+
+static void test_build_token_post_fields_truncation(void **state)
+{
+	(void)state;
+	char tiny[8];
+	bool ok = build_token_post_fields(NULL, tiny, sizeof(tiny), "abc123", "secretXYZ");
+	assert_false(ok);
+}
+
+/* ================================================================== */
 /* main                                                               */
 /* ================================================================== */
 
@@ -392,6 +425,10 @@ int main(void)
 		cmocka_unit_test(test_fetch_broadcasts_returns_ok_on_200),
 		cmocka_unit_test(test_fetch_by_id_returns_auth_error_on_403),
 		cmocka_unit_test(test_test_connection_surfaces_auth_error),
+		/* auth POST body construction */
+		cmocka_unit_test(test_build_token_post_fields_plain),
+		cmocka_unit_test(test_build_token_post_fields_encodes_special_chars),
+		cmocka_unit_test(test_build_token_post_fields_truncation),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);
