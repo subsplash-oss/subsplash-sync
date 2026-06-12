@@ -84,22 +84,6 @@ static time_t parse_iso8601(const char *str)
 }
 
 /* ------------------------------------------------------------------ */
-/* Format current UTC time as ISO-8601 for use in query filters.      */
-/* ------------------------------------------------------------------ */
-
-static void format_utc_now(char *buf, size_t buf_size)
-{
-	time_t now = time(NULL);
-	struct tm utc_time;
-#if defined(_WIN32)
-	gmtime_s(&utc_time, &now);
-#else
-	gmtime_r(&now, &utc_time);
-#endif
-	strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%SZ", &utc_time);
-}
-
-/* ------------------------------------------------------------------ */
 /* Parse a single broadcast object from an obs_data_t JSON node.      */
 /* ------------------------------------------------------------------ */
 
@@ -284,10 +268,10 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 /* ------------------------------------------------------------------ */
 /* subsplash_client_fetch_broadcasts                                  */
 /*                                                                    */
-/* Queries broadcasts whose end_at is in the future. Results arrive   */
-/* sorted by start time (ascending). Terminal statuses (ended,    */
-/* on-demand, never-happened) are skipped so a just-finished          */
-/* broadcast doesn't shadow the next scheduled event.                 */
+/* Queries upcoming broadcasts via the upcoming filter.        */
+/* Terminal statuses (ended, on-demand, never-happened) are skipped   */
+/* so a just-finished broadcast doesn't shadow the next scheduled     */
+/* event.                                                             */
 /* ------------------------------------------------------------------ */
 
 int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broadcast_t *out)
@@ -307,21 +291,17 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 
 	char *encoded_app_key = curl_easy_escape(escape_handle, client->app_key, 0);
 
-	char now_iso[32];
-	format_utc_now(now_iso, sizeof(now_iso));
-
 	/*
-	 * Use filter[end_at] with the > operator to keep both scheduled
-	 * and live broadcasts visible. The > prefix on the value tells
-	 * the kit/qry filter parser to use GreaterThan comparison.
+	 * The upcoming filter hits a cached code path in server,
+	 * avoiding a round-trip to the upstream API on most polls.
 	 */
 	char url[SUBSPLASH_MAX_URL + 512];
 	snprintf(url, sizeof(url),
 		 "%s/live/v1/broadcasts?"
 		 "filter%%5Bapp_key%%5D=%s&"
-		 "filter%%5Bend_at%%5D=%%3E%s&"
-		 "page%%5Bsize%%5D=5",
-		 client->base_url, encoded_app_key ? encoded_app_key : client->app_key, now_iso);
+		 "filter%%5Bupcoming%%5D=true&"
+		 "page%%5Bsize%%5D=1",
+		 client->base_url, encoded_app_key ? encoded_app_key : client->app_key);
 
 	curl_free(encoded_app_key);
 	curl_easy_cleanup(escape_handle);

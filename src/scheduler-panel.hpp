@@ -26,6 +26,7 @@ private slots:
 	void OnTestConnection();
 	void OnSave();
 	void OnEnableToggled();
+	void OnRefresh();
 	void OnStatusTick();
 
 private:
@@ -34,13 +35,13 @@ private:
 	QLineEdit *client_id_edit;
 	QLineEdit *client_secret_edit;
 	QLineEdit *app_key_edit;
-	QSpinBox *poll_interval_spin;
 	QSpinBox *start_lead_spin;
 	QSpinBox *stop_lag_spin;
 	QCheckBox *show_on_start_check;
 	QPushButton *test_btn;
 	QPushButton *save_btn;
 	QPushButton *enable_btn;
+	QPushButton *refresh_btn;
 	QLabel *conn_status_label;
 	QLabel *sched_status_label;
 	QLabel *next_broadcast_label;

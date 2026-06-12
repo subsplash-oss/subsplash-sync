@@ -9,6 +9,13 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
+
 static void scheduler_poll_once(scheduler_t *scheduler);
 static void *scheduler_thread_func(void *arg);
 
@@ -43,18 +50,18 @@ bool scheduler_init(scheduler_t *scheduler)
 	pthread_mutex_init(&scheduler->lock, NULL);
 	pthread_mutex_init(&scheduler->stop_mutex, NULL);
 	pthread_cond_init(&scheduler->stop_cond, NULL);
-	scheduler->poll_interval_sec = 30;
+	srand((unsigned)(time(NULL) ^ getpid()));
 	scheduler->start_lead_minutes = SCHED_DEFAULT_START_LEAD_MINUTES;
 	scheduler->stop_lag_minutes = SCHED_DEFAULT_STOP_LAG_MINUTES;
+	scheduler->cached_start_epoch = 0;
 	scheduler->cached_end_epoch = 0;
 	return true;
 }
 
 void scheduler_configure(scheduler_t *scheduler, const char *base_url, const char *client_id, const char *client_secret,
-			 const char *app_key, int poll_interval_sec, int start_lead_minutes, int stop_lag_minutes)
+			 const char *app_key, int start_lead_minutes, int stop_lag_minutes)
 {
 	subsplash_client_init(&scheduler->api, base_url, client_id, client_secret, app_key);
-	scheduler->poll_interval_sec = poll_interval_sec;
 	scheduler->start_lead_minutes = start_lead_minutes;
 	scheduler->stop_lag_minutes = stop_lag_minutes;
 }
@@ -69,6 +76,7 @@ bool scheduler_start(scheduler_t *scheduler)
 	scheduler->acted_started = false;
 	scheduler->acted_stopped = false;
 	scheduler->acted_broadcast_id[0] = '\0';
+	scheduler->cached_start_epoch = 0;
 	scheduler->cached_end_epoch = 0;
 	scheduler->consecutive_failures = 0;
 
@@ -112,6 +120,48 @@ long scheduler_consume_action(scheduler_t *scheduler)
 	return __sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_NONE);
 }
 
+void scheduler_wake(scheduler_t *scheduler)
+{
+	pthread_mutex_lock(&scheduler->stop_mutex);
+	pthread_cond_signal(&scheduler->stop_cond);
+	pthread_mutex_unlock(&scheduler->stop_mutex);
+}
+
+/* ------------------------------------------------------------------ */
+/* Adaptive poll interval: tightens as the next event approaches.     */
+/* ------------------------------------------------------------------ */
+
+int compute_poll_interval(const scheduler_t *scheduler)
+{
+	if (scheduler->cached_start_epoch <= 0)
+		return SCHED_POLL_IDLE_SEC;
+
+	time_t now = time(NULL);
+	time_t trigger = scheduler->cached_start_epoch - (scheduler->start_lead_minutes * 60);
+	long secs_to_event = (long)(trigger - now);
+
+	if (secs_to_event <= 0)
+		return SCHED_POLL_MIN_SEC;
+
+	int interval = (int)(secs_to_event / 10);
+
+	if (interval < SCHED_POLL_MIN_SEC)
+		interval = SCHED_POLL_MIN_SEC;
+	if (interval > SCHED_POLL_IDLE_SEC)
+		interval = SCHED_POLL_IDLE_SEC;
+
+	/* Jitter: add 0-25% to spread synchronized polls across
+	 * customers whose broadcasts start at the same time. */
+	int jitter = rand() % (interval / 4 + 1);
+	interval += jitter;
+
+	/* Wake exactly at the trigger point instead of overshooting. */
+	if (secs_to_event < interval)
+		interval = (int)secs_to_event;
+
+	return interval;
+}
+
 void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_len, char *next_broadcast,
 			  size_t next_broadcast_len, char *last_activity, size_t last_activity_len)
 {
@@ -139,7 +189,7 @@ static void *scheduler_thread_func(void *arg)
 	scheduler_poll_once(scheduler);
 
 	while (!scheduler->stop_requested) {
-		int wait_sec = scheduler->poll_interval_sec;
+		int wait_sec = compute_poll_interval(scheduler);
 
 		if (scheduler->consecutive_failures > 0) {
 			int backoff_sec = compute_backoff_sec(scheduler->consecutive_failures);
@@ -291,6 +341,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 			check_cached_stop(scheduler, time(NULL));
 		}
 
+		scheduler->cached_start_epoch = 0;
 		set_status(scheduler, "No upcoming broadcasts", "");
 		return;
 	}
@@ -320,6 +371,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		scheduler->acted_started = false;
 		scheduler->acted_stopped = false;
 		snprintf(scheduler->acted_broadcast_id, sizeof(scheduler->acted_broadcast_id), "%s", broadcast.id);
+		scheduler->cached_start_epoch = broadcast.start_epoch;
 		scheduler->cached_end_epoch = broadcast.end_epoch;
 		obs_log(LOG_INFO, "Now tracking broadcast %s", broadcast.id);
 
@@ -335,6 +387,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		}
 	}
 
+	scheduler->cached_start_epoch = broadcast.start_epoch;
 	scheduler->cached_end_epoch = broadcast.end_epoch;
 
 	bool is_scheduled = strcmp(broadcast.status, "scheduled") == 0;

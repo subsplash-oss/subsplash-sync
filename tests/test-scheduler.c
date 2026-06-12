@@ -82,9 +82,10 @@ static void init_test_scheduler(scheduler_t *s)
 	pthread_mutex_init(&s->lock, NULL);
 	pthread_mutex_init(&s->stop_mutex, NULL);
 	pthread_cond_init(&s->stop_cond, NULL);
-	s->poll_interval_sec = 30;
 	s->start_lead_minutes = SCHED_DEFAULT_START_LEAD_MINUTES;
 	s->stop_lag_minutes = SCHED_DEFAULT_STOP_LAG_MINUTES;
+	s->cached_start_epoch = 0;
+	s->cached_end_epoch = 0;
 }
 
 static void destroy_test_scheduler(scheduler_t *s)
@@ -462,6 +463,108 @@ static void test_poll_no_data_fallback_by_id(void **state)
 }
 
 /* ================================================================== */
+/* compute_poll_interval tests                                        */
+/* ================================================================== */
+
+static void test_poll_interval_no_cached_event(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_IDLE_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_event_far_away(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/* Event 2 hours from now => secs_to_event ~7080 => 7080/10 = 708,
+	 * capped at 300. Jitter adds 0-25% on top: 300-375. */
+	s.cached_start_epoch = time(NULL) + 7200;
+
+	int interval = compute_poll_interval(&s);
+	assert_true(interval >= SCHED_POLL_IDLE_SEC && interval <= SCHED_POLL_IDLE_SEC * 5 / 4);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_event_proportional(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/* Event 10 minutes from now, lead 2 min => trigger in 8 min (480s).
+	 * 480/10 = 48. Jitter adds 0-25%: 48-60. */
+	s.cached_start_epoch = time(NULL) + 600;
+
+	int interval = compute_poll_interval(&s);
+	assert_true(interval >= 40 && interval <= 65);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_event_imminent(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/* Event 2.5 minutes from now, lead 2 min => 30s to trigger.
+	 * 30/10 = 3, clamped up to 30. Jitter could push it above 30,
+	 * but the exact-clamp (secs_to_event=30) caps it back. */
+	s.cached_start_epoch = time(NULL) + 150;
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_MIN_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_event_past_trigger(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/* Event already within start_lead (past the trigger point). */
+	s.cached_start_epoch = time(NULL) + 60;
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_MIN_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_clamp_to_exact(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	s.start_lead_minutes = 0;
+
+	/* Event 45s away with no lead => secs_to_event = 45.
+	 * 45/10 = 4 => clamped to 30. But 45 < 30 is false,
+	 * so the exact-clamp doesn't fire. Interval = 30.
+	 *
+	 * Try 25s instead: 25/10 = 2 => clamped to 30.
+	 * But secs_to_event (25) < interval (30), so exact-clamp
+	 * fires: interval = 25. */
+	s.cached_start_epoch = time(NULL) + 25;
+
+	int interval = compute_poll_interval(&s);
+	assert_true(interval >= 23 && interval <= 27);
+
+	destroy_test_scheduler(&s);
+}
+
+/* ================================================================== */
 /* main                                                               */
 /* ================================================================== */
 
@@ -490,6 +593,13 @@ int main(void)
 		cmocka_unit_test(test_poll_simulated_live_skip),
 		cmocka_unit_test(test_poll_terminal_status_stop),
 		cmocka_unit_test(test_poll_no_data_fallback_by_id),
+		/* adaptive poll interval */
+		cmocka_unit_test(test_poll_interval_no_cached_event),
+		cmocka_unit_test(test_poll_interval_event_far_away),
+		cmocka_unit_test(test_poll_interval_event_proportional),
+		cmocka_unit_test(test_poll_interval_event_imminent),
+		cmocka_unit_test(test_poll_interval_event_past_trigger),
+		cmocka_unit_test(test_poll_interval_clamp_to_exact),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);
