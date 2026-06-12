@@ -37,6 +37,43 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata
 }
 
 /* ------------------------------------------------------------------ */
+/* curl progress callback: aborts the transfer when the owning client */
+/* has been asked to abort (e.g. during shutdown), so a joining thread */
+/* never waits out a full network timeout.                            */
+/* ------------------------------------------------------------------ */
+
+static int curl_progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)dltotal;
+	(void)dlnow;
+	(void)ultotal;
+	(void)ulnow;
+
+	subsplash_client_t *client = (subsplash_client_t *)clientp;
+	if (client && __atomic_load_n(&client->abort_requested, __ATOMIC_RELAXED))
+		return 1; /* non-zero aborts the transfer */
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared timeout/safety options applied to every curl handle.        */
+/*                                                                    */
+/* NOSIGNAL is required for use off the main thread; CONNECTTIMEOUT   */
+/* bounds the connect/DNS phase that CURLOPT_TIMEOUT alone can miss;   */
+/* the progress callback lets shutdown abort an in-flight request.    */
+/* ------------------------------------------------------------------ */
+
+static void apply_common_curl_opts(CURL *curl, subsplash_client_t *client)
+{
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_progress_cb);
+	curl_easy_setopt(curl, CURLOPT_XFERINFODATA, client);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+}
+
+/* ------------------------------------------------------------------ */
 /* ISO-8601 helper: "2026-03-29T10:00:00Z" -> time_t (UTC)           */
 /* ------------------------------------------------------------------ */
 
@@ -131,7 +168,7 @@ static CURLcode perform_authenticated_get(subsplash_client_t *client, const char
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+	apply_common_curl_opts(curl, client);
 
 	CURLcode result = curl_easy_perform(curl);
 
@@ -194,6 +231,13 @@ bool subsplash_client_init(subsplash_client_t *client, const char *base_url, con
 /* subsplash_client_destroy                                           */
 /* ------------------------------------------------------------------ */
 
+void subsplash_client_abort(subsplash_client_t *client)
+{
+	if (!client)
+		return;
+	__atomic_store_n(&client->abort_requested, 1, __ATOMIC_RELAXED);
+}
+
 void subsplash_client_destroy(subsplash_client_t *client)
 {
 	if (!client)
@@ -251,7 +295,7 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+	apply_common_curl_opts(curl, client);
 
 	CURLcode curl_result = curl_easy_perform(curl);
 

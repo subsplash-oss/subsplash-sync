@@ -41,6 +41,11 @@ void subsplash_client_destroy(subsplash_client_t *client)
 	(void)client;
 }
 
+void subsplash_client_abort(subsplash_client_t *client)
+{
+	(void)client;
+}
+
 int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broadcast_t *out)
 {
 	(void)client;

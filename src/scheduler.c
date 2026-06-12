@@ -99,6 +99,10 @@ void scheduler_stop(scheduler_t *scheduler)
 	pthread_cond_signal(&scheduler->stop_cond);
 	pthread_mutex_unlock(&scheduler->stop_mutex);
 
+	/* Abort any in-flight network request so the join below returns
+	 * promptly instead of waiting out the request's timeout. */
+	subsplash_client_abort(&scheduler->api);
+
 	pthread_join(scheduler->thread, NULL);
 	scheduler->running = false;
 

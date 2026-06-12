@@ -22,6 +22,9 @@ typedef struct {
 	time_t token_expiry;
 	pthread_mutex_t token_lock;
 	bool initialized;
+	/* Set asynchronously to abort an in-flight request (e.g. on shutdown)
+	 * so the joining thread never blocks on a hung network call. */
+	int abort_requested;
 } subsplash_client_t;
 
 typedef struct {
@@ -45,6 +48,12 @@ bool subsplash_client_init(subsplash_client_t *client, const char *base_url, con
 			   const char *client_secret, const char *app_key);
 
 void subsplash_client_destroy(subsplash_client_t *client);
+
+/*
+ * Request that any in-flight request abort as soon as possible. Safe to call
+ * from another thread; the request returns with an error shortly after.
+ */
+void subsplash_client_abort(subsplash_client_t *client);
 
 bool subsplash_client_authenticate(subsplash_client_t *client);
 
