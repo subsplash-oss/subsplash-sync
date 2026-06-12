@@ -74,18 +74,13 @@ void SchedulerPanel::SetupUI()
 	sched_grid->setContentsMargins(6, 0, 6, 4);
 	sched_grid->setVerticalSpacing(4);
 
-	poll_interval_spin = new QSpinBox(this);
-	poll_interval_spin->setRange(10, 300);
-	poll_interval_spin->setValue(30);
-	poll_interval_spin->setMinimumWidth(80);
-
 	start_lead_spin = new QSpinBox(this);
 	start_lead_spin->setRange(0, 2);
 	start_lead_spin->setValue(SCHED_DEFAULT_START_LEAD_MINUTES);
 	start_lead_spin->setMinimumWidth(80);
 
 	stop_lag_spin = new QSpinBox(this);
-	stop_lag_spin->setRange(0, 30);
+	stop_lag_spin->setRange(0, 10);
 	stop_lag_spin->setValue(SCHED_DEFAULT_STOP_LAG_MINUTES);
 	stop_lag_spin->setMinimumWidth(80);
 
@@ -93,8 +88,6 @@ void SchedulerPanel::SetupUI()
 
 	sched_grid->addWidget(new QLabel(T("Schedule.StartLead"), this), 0, 0);
 	sched_grid->addWidget(start_lead_spin, 0, 1);
-	sched_grid->addWidget(new QLabel(T("Schedule.PollInterval"), this), 0, 2);
-	sched_grid->addWidget(poll_interval_spin, 0, 3);
 
 	sched_grid->addWidget(new QLabel(T("Schedule.StopLag"), this), 1, 0);
 	sched_grid->addWidget(stop_lag_spin, 1, 1);
@@ -108,9 +101,12 @@ void SchedulerPanel::SetupUI()
 
 	test_btn = new QPushButton(T("Buttons.TestConnection"), this);
 	save_btn = new QPushButton(T("Buttons.Save"), this);
+	refresh_btn = new QPushButton(T("Buttons.Refresh"), this);
+	refresh_btn->setEnabled(false);
 
 	btn_layout->addWidget(test_btn);
 	btn_layout->addWidget(save_btn);
+	btn_layout->addWidget(refresh_btn);
 	main_layout->addLayout(btn_layout);
 
 	enable_btn = new QPushButton(T("Buttons.Enable"), this);
@@ -151,6 +147,7 @@ void SchedulerPanel::SetupUI()
 
 	connect(test_btn, &QPushButton::clicked, this, &SchedulerPanel::OnTestConnection);
 	connect(save_btn, &QPushButton::clicked, this, &SchedulerPanel::OnSave);
+	connect(refresh_btn, &QPushButton::clicked, this, &SchedulerPanel::OnRefresh);
 	connect(enable_btn, &QPushButton::toggled, this, &SchedulerPanel::OnEnableToggled);
 }
 
@@ -161,14 +158,12 @@ void SchedulerPanel::LoadSettings()
 	if (!data)
 		data = obs_data_create();
 
-	obs_data_set_default_int(data, "poll_interval", 30);
 	obs_data_set_default_int(data, "start_lead", SCHED_DEFAULT_START_LEAD_MINUTES);
 	obs_data_set_default_int(data, "stop_lag", SCHED_DEFAULT_STOP_LAG_MINUTES);
 
 	client_id_edit->setText(obs_data_get_string(data, "client_id"));
 	client_secret_edit->setText(obs_data_get_string(data, "client_secret"));
 	app_key_edit->setText(obs_data_get_string(data, "app_key"));
-	poll_interval_spin->setValue((int)obs_data_get_int(data, "poll_interval"));
 	start_lead_spin->setValue((int)obs_data_get_int(data, "start_lead"));
 	stop_lag_spin->setValue((int)obs_data_get_int(data, "stop_lag"));
 	show_on_start_check->setChecked(obs_data_get_bool(data, "show_on_start"));
@@ -188,7 +183,6 @@ void SchedulerPanel::SaveSettings()
 	obs_data_set_string(data, "client_secret", client_secret_edit->text().toUtf8().constData());
 	obs_data_set_string(data, "app_key", app_key_edit->text().toUtf8().constData());
 	obs_data_set_string(data, "base_url", DEFAULT_BASE_URL);
-	obs_data_set_int(data, "poll_interval", poll_interval_spin->value());
 	obs_data_set_int(data, "start_lead", start_lead_spin->value());
 	obs_data_set_int(data, "stop_lag", stop_lag_spin->value());
 	obs_data_set_bool(data, "show_on_start", show_on_start_check->isChecked());
@@ -227,12 +221,19 @@ void SchedulerPanel::OnSave()
 	if (g_scheduler.running) {
 		scheduler_configure(&g_scheduler, DEFAULT_BASE_URL, client_id_edit->text().toUtf8().constData(),
 				    client_secret_edit->text().toUtf8().constData(),
-				    app_key_edit->text().toUtf8().constData(), poll_interval_spin->value(),
-				    start_lead_spin->value(), stop_lag_spin->value());
+				    app_key_edit->text().toUtf8().constData(), start_lead_spin->value(),
+				    stop_lag_spin->value());
 	}
 
 	save_btn->setText(T("Status.Saved"));
 	QTimer::singleShot(2000, this, [this]() { save_btn->setText(T("Buttons.Save")); });
+}
+
+void SchedulerPanel::OnRefresh()
+{
+	scheduler_wake(&g_scheduler);
+	refresh_btn->setText(T("Status.Refreshing"));
+	QTimer::singleShot(2000, this, [this]() { refresh_btn->setText(T("Buttons.Refresh")); });
 }
 
 void SchedulerPanel::OnEnableToggled()
@@ -242,18 +243,20 @@ void SchedulerPanel::OnEnableToggled()
 
 		scheduler_configure(&g_scheduler, DEFAULT_BASE_URL, client_id_edit->text().toUtf8().constData(),
 				    client_secret_edit->text().toUtf8().constData(),
-				    app_key_edit->text().toUtf8().constData(), poll_interval_spin->value(),
-				    start_lead_spin->value(), stop_lag_spin->value());
+				    app_key_edit->text().toUtf8().constData(), start_lead_spin->value(),
+				    stop_lag_spin->value());
 
 		scheduler_start(&g_scheduler);
 		SaveSettings();
 		enable_btn->setText(T("Buttons.Disable"));
+		refresh_btn->setEnabled(true);
 		obs_log(LOG_INFO, "Scheduler enabled");
 	} else {
 		scheduler_stop(&g_scheduler);
 		g_scheduler_enabled = false;
 		SaveSettings();
 		enable_btn->setText(T("Buttons.Enable"));
+		refresh_btn->setEnabled(false);
 		obs_log(LOG_INFO, "Scheduler disabled");
 	}
 }
@@ -267,6 +270,7 @@ void SchedulerPanel::OnStatusTick()
 		enable_btn->setChecked(running);
 		enable_btn->setText(running ? T("Buttons.Disable") : T("Buttons.Enable"));
 		enable_btn->blockSignals(false);
+		refresh_btn->setEnabled(running);
 	}
 
 	if (running) {

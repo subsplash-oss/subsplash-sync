@@ -49,9 +49,9 @@ void subsplash_client_destroy(subsplash_client_t *client);
 bool subsplash_client_authenticate(subsplash_client_t *client);
 
 /*
- * Fetch the earliest non-terminal broadcast whose scheduled end_at
- * is still in the future. Skips ended/on-demand/never-happened
- * results. Returns a SUBSPLASH_FETCH_* result code.
+ * Fetch the earliest non-terminal upcoming broadcast. Skips
+ * ended/on-demand/never-happened results. Returns a
+ * SUBSPLASH_FETCH_* result code.
  */
 int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broadcast_t *out);
 
