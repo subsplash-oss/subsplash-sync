@@ -104,11 +104,37 @@ CURLcode curl_easy_getinfo(CURL *curl, CURLINFO info, ...)
 	return CURLE_OK;
 }
 
+/*
+ * Real RFC 3986 percent-encoding so tests can verify that reserved
+ * characters in credentials are escaped. Mirrors libcurl: only the
+ * unreserved set (ALPHA / DIGIT / - _ . ~) is left untouched.
+ */
 char *curl_easy_escape(CURL *curl, const char *string, int length)
 {
 	(void)curl;
-	(void)length;
-	return string ? strdup(string) : NULL;
+	if (!string)
+		return NULL;
+
+	size_t len = length > 0 ? (size_t)length : strlen(string);
+	char *out = malloc(len * 3 + 1);
+	if (!out)
+		return NULL;
+
+	static const char hex[] = "0123456789ABCDEF";
+	size_t o = 0;
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)string[i];
+		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
+		    c == '_' || c == '.' || c == '~') {
+			out[o++] = (char)c;
+		} else {
+			out[o++] = '%';
+			out[o++] = hex[c >> 4];
+			out[o++] = hex[c & 0x0F];
+		}
+	}
+	out[o] = '\0';
+	return out;
 }
 
 const char *curl_easy_strerror(CURLcode code)

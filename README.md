@@ -153,6 +153,6 @@ arrives. It stops streaming when the `end_at` time passes.
 ## Limitations (PoC)
 
 - Manages a single stream (one broadcast at a time)
-- No retry logic for transient API errors
+- Transient API errors are retried with jittered exponential backoff (2s up to 60s); failures fall back to the cached broadcast end time so a scheduled STOP still fires
 - Settings UI uses hardcoded English strings (locale file provided for future i18n)
 - Simulated-live broadcasts are detected and the OBS stream is **not** started for them (only true live broadcasts trigger OBS streaming)
