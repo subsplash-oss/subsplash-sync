@@ -94,6 +94,9 @@ void SchedulerPanel::SetupUI()
 			app_key_edit->setCursorPosition(pos);
 			app_key_edit->blockSignals(false);
 		}
+		/* Flip Enable the instant the last required cred is filled/cleared,
+		 * without waiting for the autosave debounce. */
+		UpdateEnableButtonState();
 	});
 
 	cred_form->addRow(T("Credentials.ClientId"), client_id_edit);
@@ -160,6 +163,10 @@ void SchedulerPanel::SetupUI()
 	status_grid->setColumnStretch(1, 1);
 
 	conn_status_label = new QLabel(T("Status.NotConfigured"), this);
+	/* Error messages (e.g. "Signed in, but not authorized…") run long;
+	 * wrap instead of truncating mid-sentence. */
+	conn_status_label->setWordWrap(true);
+	conn_status_label->setMinimumHeight(conn_status_label->fontMetrics().lineSpacing() * 2);
 	sched_status_label = new QLabel(T("Status.Stopped"), this);
 	next_broadcast_label = new QLabel(T("Status.NA"), this);
 	next_broadcast_label->setWordWrap(true);
@@ -194,6 +201,10 @@ void SchedulerPanel::SetupUI()
 	connect(client_id_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
 	connect(client_secret_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
 	connect(app_key_edit, &QLineEdit::textEdited, this, &SchedulerPanel::ScheduleAutosave);
+	/* Keep Enable's availability in sync as credentials are typed/cleared
+	 * (app_key is handled in its uppercase textChanged lambda above). */
+	connect(client_id_edit, &QLineEdit::textChanged, this, &SchedulerPanel::UpdateEnableButtonState);
+	connect(client_secret_edit, &QLineEdit::textChanged, this, &SchedulerPanel::UpdateEnableButtonState);
 	connect(client_id_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
 	connect(client_secret_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
 	connect(app_key_edit, &QLineEdit::editingFinished, this, &SchedulerPanel::OnFieldChanged);
@@ -345,11 +356,15 @@ void SchedulerPanel::LoadSettings()
 
 	is_loading = false;
 
+	UpdateEnableButtonState();
+
 	/* Populate the Connection field with a real result instead of leaving it
 	 * "Unknown". When the scheduler is already running, OnStatusTick reflects
 	 * live health, so only probe here while it's stopped. */
 	if (CredsComplete() && !g_scheduler.running)
 		StartConnectionCheck(false);
+	else if (!CredsComplete())
+		SetLabelState(conn_status_label, StatusColor::Grey);
 }
 
 void SchedulerPanel::SaveSettings()
@@ -377,6 +392,45 @@ bool SchedulerPanel::CredsComplete() const
 	       !app_key_edit->text().isEmpty();
 }
 
+void SchedulerPanel::UpdateEnableButtonState()
+{
+	/* Allow toggling when creds are complete, or while already running so
+	 * Disable is never locked out. */
+	const bool allow = CredsComplete() || enable_btn->isChecked();
+	enable_btn->setEnabled(allow);
+	/* Best-effort hint (disabled widgets may not deliver hover events on
+	 * all platforms; the grey "Not configured" Connection row and the
+	 * expanded Credentials section are the primary cue). */
+	enable_btn->setToolTip(allow ? QString() : T("Buttons.EnableNeedsCreds"));
+}
+
+void SchedulerPanel::SetLabelState(QLabel *label, StatusColor color)
+{
+	/* OnStatusTick fires every second; only restyle when the color actually
+	 * changes to avoid needless stylesheet churn/flicker. */
+	const QVariant prev = label->property("statusColor");
+	if (prev.isValid() && prev.toInt() == static_cast<int>(color))
+		return;
+	label->setProperty("statusColor", static_cast<int>(color));
+
+	const char *css = "";
+	switch (color) {
+	case StatusColor::Green:
+		css = "QLabel { color: #3fb950; font-weight: bold; }";
+		break;
+	case StatusColor::Amber:
+		css = "QLabel { color: #d29922; font-weight: bold; }";
+		break;
+	case StatusColor::Red:
+		css = "QLabel { color: #f85149; font-weight: bold; }";
+		break;
+	case StatusColor::Grey:
+		css = "QLabel { color: #8b949e; font-weight: bold; }";
+		break;
+	}
+	label->setStyleSheet(css);
+}
+
 /*
  * Authenticate against the API on a background thread and report the real
  * result in the Connection field, so it never sits at a meaningless
@@ -386,14 +440,21 @@ bool SchedulerPanel::CredsComplete() const
  */
 void SchedulerPanel::StartConnectionCheck(bool collapse_on_success)
 {
+	/* Bump the generation first so an in-flight check is invalidated even
+	 * when we short-circuit below -- otherwise clearing a credential while a
+	 * previous check is running lets its late "Connected" result overwrite
+	 * the "Not configured" state we set here. */
+	const unsigned gen = ++conn_check_gen;
+
 	if (!CredsComplete()) {
 		conn_status_label->setText(T("Status.NotConfigured"));
+		SetLabelState(conn_status_label, StatusColor::Grey);
 		return;
 	}
 
 	conn_status_label->setText(T("Status.Checking"));
+	SetLabelState(conn_status_label, StatusColor::Amber);
 
-	const unsigned gen = ++conn_check_gen;
 	QPointer<SchedulerPanel> self(this);
 	const std::string id = client_id_edit->text().toStdString();
 	const std::string secret = client_secret_edit->text().toStdString();
@@ -426,6 +487,8 @@ void SchedulerPanel::StartConnectionCheck(bool collapse_on_success)
 				if (!self || self->conn_check_gen != gen)
 					return;
 				self->conn_status_label->setText(text);
+				self->SetLabelState(self->conn_status_label,
+						    success ? StatusColor::Green : StatusColor::Red);
 				if (success && collapse_on_success)
 					self->CollapseConfiguredSections();
 			},
@@ -459,6 +522,7 @@ void SchedulerPanel::OnFieldChanged()
 		StartConnectionCheck(false);
 	}
 
+	UpdateEnableButtonState();
 	FlashAutosaved();
 }
 
@@ -510,6 +574,8 @@ void SchedulerPanel::OnStatusTick()
 		refresh_btn->setEnabled(running);
 	}
 
+	UpdateEnableButtonState();
+
 	if (running) {
 		sched_status_label->setText(T("Status.Running"));
 
@@ -522,20 +588,36 @@ void SchedulerPanel::OnStatusTick()
 		last_activity_label->setText(activity_buf);
 
 		/* Reflect the poll thread's real health rather than assuming
-		 * success: streaming when live, error while the API is failing,
-		 * otherwise connected. */
-		if (obs_frontend_streaming_active()) {
+		 * success: streaming when live, the engine's cause-specific error
+		 * text while the API is failing (e.g. "Not authorized…" vs
+		 * "Connection problem…"), otherwise connected. Color the rows so
+		 * state reads at a glance. */
+		const bool streaming = obs_frontend_streaming_active();
+		const bool failing = __sync_fetch_and_add(&g_scheduler.consecutive_failures, 0) > 0;
+		if (streaming) {
 			conn_status_label->setText(T("Status.Streaming"));
-		} else if (__sync_fetch_and_add(&g_scheduler.consecutive_failures, 0) > 0) {
-			conn_status_label->setText(T("Status.ApiError"));
+			SetLabelState(conn_status_label, StatusColor::Green);
+		} else if (failing) {
+			QString cause = QString::fromUtf8(status_buf);
+			if (cause.isEmpty())
+				cause = T("Status.ApiError");
+			conn_status_label->setText(cause);
+			SetLabelState(conn_status_label, StatusColor::Red);
 		} else {
 			conn_status_label->setText(T("Status.Connected"));
+			SetLabelState(conn_status_label, StatusColor::Green);
 		}
+
+		/* Sync row: green when live, red when the API is failing, amber
+		 * while running but waiting (not yet live). */
+		SetLabelState(sched_status_label,
+			      streaming ? StatusColor::Green : (failing ? StatusColor::Red : StatusColor::Amber));
 
 		/* Once we're authenticated, collapse the setup sections once. */
 		CollapseConfiguredSections();
 	} else {
 		sched_status_label->setText(T("Status.Stopped"));
+		SetLabelState(sched_status_label, StatusColor::Grey);
 		next_broadcast_label->setText(T("Status.NA"));
 		last_activity_label->setText("");
 	}
