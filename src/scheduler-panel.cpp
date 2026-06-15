@@ -126,14 +126,11 @@ void SchedulerPanel::SetupUI()
 	stop_lag_spin->setValue(SCHED_DEFAULT_STOP_LAG_MINUTES);
 	stop_lag_spin->setMinimumWidth(80);
 
-	show_on_start_check = new QCheckBox(T("Schedule.ShowOnStart"), this);
-
 	sched_grid->addWidget(new QLabel(T("Schedule.StartLead"), this), 0, 0);
 	sched_grid->addWidget(start_lead_spin, 0, 1);
 
 	sched_grid->addWidget(new QLabel(T("Schedule.StopLag"), this), 1, 0);
 	sched_grid->addWidget(stop_lag_spin, 1, 1);
-	sched_grid->addWidget(show_on_start_check, 1, 2, 1, 2);
 
 	sched_toggle_btn = MakeCollapsibleHeader("Schedule.Title", sched_container);
 	main_layout->addWidget(sched_toggle_btn);
@@ -204,7 +201,6 @@ void SchedulerPanel::SetupUI()
 	connect(stop_lag_spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &SchedulerPanel::ScheduleAutosave);
 	connect(start_lead_spin, &QSpinBox::editingFinished, this, &SchedulerPanel::OnFieldChanged);
 	connect(stop_lag_spin, &QSpinBox::editingFinished, this, &SchedulerPanel::OnFieldChanged);
-	connect(show_on_start_check, &QCheckBox::toggled, this, &SchedulerPanel::OnFieldChanged);
 }
 
 QToolButton *SchedulerPanel::MakeCollapsibleHeader(const char *title_key, QWidget *container)
@@ -334,7 +330,6 @@ void SchedulerPanel::LoadSettings()
 	app_key_edit->setText(obs_data_get_string(data, "app_key"));
 	start_lead_spin->setValue((int)obs_data_get_int(data, "start_lead"));
 	stop_lag_spin->setValue((int)obs_data_get_int(data, "stop_lag"));
-	show_on_start_check->setChecked(obs_data_get_bool(data, "show_on_start"));
 
 	obs_data_release(data);
 
@@ -368,7 +363,6 @@ void SchedulerPanel::SaveSettings()
 	obs_data_set_string(data, "base_url", DEFAULT_BASE_URL);
 	obs_data_set_int(data, "start_lead", start_lead_spin->value());
 	obs_data_set_int(data, "stop_lag", stop_lag_spin->value());
-	obs_data_set_bool(data, "show_on_start", show_on_start_check->isChecked());
 	obs_data_set_bool(data, "enabled", g_scheduler_enabled);
 
 	obs_data_save_json_safe(data, path, "tmp", "bak");

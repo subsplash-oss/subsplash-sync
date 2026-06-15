@@ -22,6 +22,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QDockWidget>
 #include <QTimer>
 #include <QMainWindow>
+#include <QByteArray>
 #include "plugin-support.h"
 #include "scheduler-panel.hpp"
 
@@ -59,6 +60,57 @@ static time_t g_restart_stop_time = 0;
 extern "C" const char *sched_get_config_path(void)
 {
 	return g_config_path;
+}
+
+/* ------------------------------------------------------------------ */
+/* Self-managed dock layout persistence                               */
+/*                                                                    */
+/* OBS registers plugin docks (obs_frontend_add_dock_by_id) after the */
+/* main window's restoreState() has already run, and leaves them      */
+/* floating + hidden. QMainWindow::restoreDockWidget() does not        */
+/* reliably re-dock a panel added this late -- it returns true yet     */
+/* leaves the dock floating, especially when it was part of a tab      */
+/* group or split. So we snapshot the whole layout ourselves and       */
+/* re-apply it on load instead of trusting OBS to restore our dock.    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Snapshot the entire main-window dock layout. This is the same data OBS
+ * persists itself, so reapplying it on load is idempotent for the built-in
+ * docks while reproducing our panel's exact position -- split, tab grouping
+ * and size -- which a piecemeal area/tab restore cannot.
+ */
+static void save_dock_layout(QMainWindow *main_window)
+{
+	obs_data_t *d = obs_data_create();
+	QByteArray state = main_window->saveState().toBase64();
+	obs_data_set_string(d, "main_state", state.constData());
+
+	char *path = obs_module_config_path("dock.json");
+	if (path) {
+		obs_data_save_json_safe(d, path, "tmp", "bak");
+		bfree(path);
+	}
+	obs_data_release(d);
+}
+
+static bool restore_dock_layout(QMainWindow *main_window)
+{
+	char *path = obs_module_config_path("dock.json");
+	if (!path)
+		return false;
+	obs_data_t *d = obs_data_create_from_json_file(path);
+	bfree(path);
+	if (!d)
+		return false; /* first run -- nothing saved yet, leave OBS defaults */
+
+	const char *state = obs_data_get_string(d, "main_state");
+	bool restored = false;
+	if (state && *state)
+		restored = main_window->restoreState(QByteArray::fromBase64(QByteArray(state)));
+
+	obs_data_release(d);
+	return restored;
 }
 
 /* ------------------------------------------------------------------ */
@@ -117,29 +169,43 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 		obs_log(LOG_INFO, "Stream fully stopped, restart delay begins now");
 	}
 
+	/* Persist the final dock layout on shutdown. The frontend API and main
+	 * window are still valid during the EXIT event. */
+	if (event == OBS_FRONTEND_EVENT_EXIT) {
+		auto *mw = static_cast<QMainWindow *>(obs_frontend_get_main_window());
+		if (mw && mw->findChild<QDockWidget *>("subsplash-scheduler"))
+			save_dock_layout(mw);
+		return;
+	}
+
 	if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
 		return;
 
-	/* Register the dockable panel */
+	/* Register the dockable panel. */
 	QMainWindow *main_window = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	auto *panel = new SchedulerPanel(main_window);
 	obs_frontend_add_dock_by_id("subsplash-scheduler", "Subsplash Live Scheduler", panel);
 
+	/* OBS leaves the dock floating + hidden and does not reliably re-dock a
+	 * panel registered this late, so re-apply our own saved layout. The
+	 * snapshot is taken only on EXIT (handled above), which keeps dock.json in
+	 * lockstep with OBS's own layout save and avoids overriding sibling docks
+	 * with a mid-session snapshot. */
 	auto *dock = main_window->findChild<QDockWidget *>("subsplash-scheduler");
-	if (dock)
-		dock->setVisible(true);
+	if (dock) {
+		bool restored = restore_dock_layout(main_window);
+		/* First run (no saved layout yet): surface the dock once so it is
+		 * discoverable. After that, the restored state carries the dock's
+		 * own visibility -- left open it reopens, closed it stays closed --
+		 * matching native OBS dock behavior. */
+		if (!restored)
+			dock->setVisible(true);
+	}
 
 	/* Auto-start scheduler if previously enabled */
 	obs_data_t *cfg = obs_data_create_from_json_file(g_config_path);
 	if (!cfg)
 		return;
-
-	bool show_on_start = obs_data_get_bool(cfg, "show_on_start");
-	if (show_on_start) {
-		auto *dock = main_window->findChild<QDockWidget *>("subsplash-scheduler");
-		if (dock)
-			dock->setVisible(true);
-	}
 
 	bool enabled = obs_data_get_bool(cfg, "enabled");
 	if (!enabled) {
