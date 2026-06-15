@@ -300,7 +300,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		 * end time so STOP still fires if scheduled.
 		 */
 		check_cached_stop(scheduler, time(NULL));
-		set_status(scheduler, "Not authorized", "Check client role and app key");
+		set_status(scheduler, "Not authorized — check your App Key", "Check your client role and App Key");
 		return;
 	}
 
@@ -313,7 +313,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		 * end time so STOP still fires if scheduled.
 		 */
 		check_cached_stop(scheduler, time(NULL));
-		set_status(scheduler, "API error (retrying)", NULL);
+		set_status(scheduler, "Connection problem — check your internet (retrying)", NULL);
 		return;
 	}
 

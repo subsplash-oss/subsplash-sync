@@ -556,7 +556,7 @@ bool subsplash_client_test_connection(subsplash_client_t *client, char *status_o
 		return false;
 
 	if (!subsplash_client_authenticate(client)) {
-		snprintf(status_out, status_len, "Authentication failed");
+		snprintf(status_out, status_len, "Sign-in failed — check your Client ID and Secret");
 		return false;
 	}
 
@@ -565,14 +565,13 @@ bool subsplash_client_test_connection(subsplash_client_t *client, char *status_o
 
 	if (result == SUBSPLASH_FETCH_AUTH_ERROR) {
 		snprintf(status_out, status_len,
-			 "Authenticated, but not authorized to read broadcasts. "
-			 "Token may not have the correct role for this app key.");
+			 "Signed in, but not authorized for this App Key — double-check your App Key");
 		return false;
-	} else if (result == SUBSPLASH_FETCH_OK && broadcast.valid) {
-		snprintf(status_out, status_len, "Connected. Next broadcast: %s", broadcast.start_at);
-	} else {
-		snprintf(status_out, status_len, "Connected. No upcoming broadcasts.");
 	}
 
+	/* Connectivity only: report that the creds reach the API. The upcoming
+	 * broadcast has its own status row, so don't imply pending action here
+	 * (especially while sync is stopped). */
+	snprintf(status_out, status_len, "Connected");
 	return true;
 }

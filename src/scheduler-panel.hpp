@@ -40,6 +40,14 @@ private:
 	void FlashAutosaved();
 	bool CredsComplete() const;
 	void StartConnectionCheck(bool collapse_on_success);
+	/* Enable is gated on complete credentials so the scheduler can't be
+	 * started into a dead-end state; a running scheduler stays togglable
+	 * so Disable always works. */
+	void UpdateEnableButtonState();
+
+	/* Status-row color states for at-a-glance health. */
+	enum class StatusColor { Green, Amber, Red, Grey };
+	void SetLabelState(QLabel *label, StatusColor color);
 
 	QToolButton *cred_toggle_btn;
 	QWidget *cred_container;
