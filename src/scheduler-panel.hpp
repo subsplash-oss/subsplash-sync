@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QWidget>
-#include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QLabel>
@@ -51,7 +50,6 @@ private:
 	QLineEdit *app_key_edit;
 	QSpinBox *start_lead_spin;
 	QSpinBox *stop_lag_spin;
-	QCheckBox *show_on_start_check;
 	QPushButton *test_btn;
 	QPushButton *enable_btn;
 	QPushButton *refresh_btn;
