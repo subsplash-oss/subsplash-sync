@@ -33,11 +33,11 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.subsplash.obs-subsplash-scheduler"
+            "bundleId": "com.subsplash.obs-subsplash-sync"
         }
     },
-    "name": "obs-subsplash-scheduler",
-    "displayName": "Subsplash Live Stream Scheduler",
+    "name": "obs-subsplash-sync",
+    "displayName": "Subsplash Sync",
     "version": "0.1.0",
     "author": "Subsplash",
     "website": "https://www.subsplash.com",
