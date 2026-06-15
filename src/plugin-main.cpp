@@ -1,5 +1,5 @@
 /*
-Subsplash Live Stream Scheduler
+Subsplash Sync
 Copyright (C) 2026 Subsplash <api@subsplash.com>
 
 This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,7 @@ extern "C" {
 }
 
 OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE("obs-subsplash-scheduler", "en-US")
+OBS_MODULE_USE_DEFAULT_LOCALE("obs-subsplash-sync", "en-US")
 
 /* ------------------------------------------------------------------ */
 /* Global state                                                       */
@@ -173,7 +173,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	 * window are still valid during the EXIT event. */
 	if (event == OBS_FRONTEND_EVENT_EXIT) {
 		auto *mw = static_cast<QMainWindow *>(obs_frontend_get_main_window());
-		if (mw && mw->findChild<QDockWidget *>("subsplash-scheduler"))
+		if (mw && mw->findChild<QDockWidget *>("subsplash-sync"))
 			save_dock_layout(mw);
 		return;
 	}
@@ -184,14 +184,14 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	/* Register the dockable panel. */
 	QMainWindow *main_window = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	auto *panel = new SchedulerPanel(main_window);
-	obs_frontend_add_dock_by_id("subsplash-scheduler", "Subsplash Live Scheduler", panel);
+	obs_frontend_add_dock_by_id("subsplash-sync", "Subsplash Sync", panel);
 
 	/* OBS leaves the dock floating + hidden and does not reliably re-dock a
 	 * panel registered this late, so re-apply our own saved layout. The
 	 * snapshot is taken only on EXIT (handled above), which keeps dock.json in
 	 * lockstep with OBS's own layout save and avoids overriding sibling docks
 	 * with a mid-session snapshot. */
-	auto *dock = main_window->findChild<QDockWidget *>("subsplash-scheduler");
+	auto *dock = main_window->findChild<QDockWidget *>("subsplash-sync");
 	if (dock) {
 		bool restored = restore_dock_layout(main_window);
 		/* First run (no saved layout yet): surface the dock once so it is
@@ -280,7 +280,7 @@ void obs_module_unload(void)
 		g_action_timer = nullptr;
 	}
 
-	obs_frontend_remove_dock("subsplash-scheduler");
+	obs_frontend_remove_dock("subsplash-sync");
 	obs_frontend_remove_event_callback(on_frontend_event, NULL);
 	scheduler_destroy(&g_scheduler);
 

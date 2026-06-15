@@ -1,4 +1,4 @@
-# Subsplash Live Stream Scheduler — OBS Studio Plugin
+# Subsplash Sync — OBS Studio Plugin
 
 A native OBS Studio plugin that automatically starts and stops streaming based on
 the broadcast schedule set in the Subsplash Dashboard.
@@ -97,7 +97,7 @@ After building, copy the plugin binary to your OBS plugins directory:
 ## Usage
 
 1. Launch OBS Studio.
-2. Go to **Tools > Subsplash Live Scheduler**.
+2. Go to **Tools > Subsplash Sync**.
 3. Enter your Subsplash API credentials:
    - **Client ID** and **Client Secret** from your API Client
    - **App Key** (6-character code for your organization)
@@ -108,7 +108,7 @@ After building, copy the plugin binary to your OBS plugins directory:
    - **Poll Interval**: How often to check for broadcasts (default: 30 sec)
    - **Start Lead**: Minutes before scheduled start to begin streaming (default: 1)
    - **Stop Lag**: Minutes after scheduled end to stop streaming (default: 0)
-6. Click **Save**, then **Enable Scheduler**.
+6. Click **Save**, then **Enable Sync**.
 
 The plugin persists your settings and will auto-start the scheduler when OBS
 launches if it was previously enabled.
