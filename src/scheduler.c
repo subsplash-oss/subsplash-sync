@@ -1,5 +1,6 @@
 #include "scheduler.h"
 
+#include "compat-atomics.h"
 #include "plugin-support.h"
 
 #include <obs-module.h>
@@ -121,7 +122,7 @@ void scheduler_destroy(scheduler_t *scheduler)
 
 long scheduler_consume_action(scheduler_t *scheduler)
 {
-	return __sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_NONE);
+	return sched_atomic_exchange(&scheduler->action, SCHED_ACTION_NONE);
 }
 
 void scheduler_wake(scheduler_t *scheduler)
@@ -276,7 +277,7 @@ static void check_cached_stop(scheduler_t *scheduler, time_t now)
 	if (now >= trigger_stop) {
 		obs_log(LOG_INFO, "Signaling STOP from cached end time for broadcast %s",
 			scheduler->acted_broadcast_id);
-		__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_STOP);
+		sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
 		scheduler->acted_stopped = true;
 	}
 }
@@ -337,7 +338,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 				if (is_terminal && !tracked.simulated_live) {
 					obs_log(LOG_INFO, "Signaling STOP: tracked broadcast %s is now %s", tracked.id,
 						tracked.status);
-					__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_STOP);
+					sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
 					scheduler->acted_stopped = true;
 				}
 			}
@@ -369,7 +370,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 				"Broadcast transition: %s -> %s, "
 				"signaling RESTART",
 				scheduler->acted_broadcast_id, broadcast.id);
-			__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_RESTART);
+			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_RESTART);
 		}
 
 		scheduler->acted_started = false;
@@ -379,7 +380,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		scheduler->cached_end_epoch = broadcast.end_epoch;
 		obs_log(LOG_INFO, "Now tracking broadcast %s", broadcast.id);
 
-		if (__sync_fetch_and_add(&scheduler->action, 0) == SCHED_ACTION_RESTART) {
+		if (sched_atomic_load(&scheduler->action) == SCHED_ACTION_RESTART) {
 			char start_local[32], end_local[32];
 			format_local_time(broadcast.start_epoch, start_local, sizeof(start_local));
 			format_local_time(broadcast.end_epoch, end_local, sizeof(end_local));
@@ -406,7 +407,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 	if (is_terminal && scheduler->acted_started && !scheduler->acted_stopped) {
 		if (!broadcast.simulated_live) {
 			obs_log(LOG_INFO, "Signaling STOP: broadcast %s status is %s", broadcast.id, broadcast.status);
-			__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_STOP);
+			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
 		}
 		scheduler->acted_stopped = true;
 	}
@@ -420,7 +421,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		if (broadcast.simulated_live) {
 			obs_log(LOG_INFO, "Skipping START for simulated-live broadcast %s", broadcast.id);
 		} else {
-			__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_START);
+			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_START);
 			obs_log(LOG_INFO, "Signaling START for broadcast %s", broadcast.id);
 		}
 		scheduler->acted_started = true;
@@ -434,7 +435,7 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 		if (broadcast.simulated_live) {
 			obs_log(LOG_INFO, "Skipping STOP for simulated-live broadcast %s", broadcast.id);
 		} else {
-			__sync_lock_test_and_set(&scheduler->action, SCHED_ACTION_STOP);
+			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
 			obs_log(LOG_INFO, "Signaling STOP for broadcast %s (end time reached)", broadcast.id);
 		}
 		scheduler->acted_stopped = true;
