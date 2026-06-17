@@ -1,5 +1,6 @@
 #include "scheduler-panel.hpp"
 
+#include "compat-atomics.h"
 #include "plugin-support.h"
 
 #include <QVBoxLayout>
@@ -593,7 +594,7 @@ void SchedulerPanel::OnStatusTick()
 		 * "Connection problem…"), otherwise connected. Color the rows so
 		 * state reads at a glance. */
 		const bool streaming = obs_frontend_streaming_active();
-		const bool failing = __sync_fetch_and_add(&g_scheduler.consecutive_failures, 0) > 0;
+		const bool failing = sched_atomic_load(&g_scheduler.consecutive_failures) > 0;
 		if (streaming) {
 			conn_status_label->setText(T("Status.Streaming"));
 			SetLabelState(conn_status_label, StatusColor::Green);
