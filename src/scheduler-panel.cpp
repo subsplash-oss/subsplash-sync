@@ -314,12 +314,16 @@ void SchedulerPanel::FlushAutosave()
  *   - Docked: we must not resize the main window, but briefly clamping the
  *     dock's maxHeight makes QMainWindow's dock layout reclaim the freed
  *     space; we then restore the cap so the user can still grow it.
- * Two timing subtleties:
+ * Three subtleties:
  *   1. The dock's cached sizeHint lags a child visibility change by an event
  *      cycle, so we force a recompute (adjustSize/updateGeometry) and measure
  *      on a later tick once the layout has settled.
  *   2. The dock won't shrink below its (stale) minimum via resize() alone, so
  *      the maxHeight clamp is what actually forces the shrink in both states.
+ *   3. The status rows use word-wrap, whose sizeHint is width-independent and
+ *      inflated, so dock->sizeHint() over-reserves height. We measure the
+ *      panel's true content height via heightForWidth(width()) and add the
+ *      dock chrome to get an accurate clamp target.
  */
 void SchedulerPanel::FitDockToContents()
 {
@@ -340,8 +344,21 @@ void SchedulerPanel::FitDockToContents()
 		 * content width, leaving dead space on the right when docked. */
 		updateGeometry();
 		dock->updateGeometry();
-		QTimer::singleShot(50, dock, [dock]() {
+		QTimer::singleShot(50, dock, [dock, this]() {
+			/* Word-wrap labels report a width-independent (inflated)
+			 * sizeHint, so dock->sizeHint() over-reserves height and the
+			 * dock won't shrink tight on collapse. Measure the panel's real
+			 * content height at its current width via heightForWidth and add
+			 * the dock chrome (title bar/margins) so we clamp to what the
+			 * collapsed layout actually needs. */
 			int target = dock->sizeHint().height();
+			if (hasHeightForWidth() && width() > 0) {
+				const int content_h = heightForWidth(width());
+				if (content_h > 0) {
+					const int chrome = dock->sizeHint().height() - sizeHint().height();
+					target = content_h + (chrome > 0 ? chrome : 0);
+				}
+			}
 			if (dock->isFloating())
 				dock->resize(dock->width(), target);
 			dock->setMaximumHeight(target);
