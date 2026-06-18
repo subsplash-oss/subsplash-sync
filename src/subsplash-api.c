@@ -1,5 +1,6 @@
 #include "subsplash-api.h"
 
+#include "compat-atomics.h"
 #include "plugin-support.h"
 
 #include <curl/curl.h>
@@ -50,7 +51,7 @@ static int curl_progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
 	(void)ulnow;
 
 	subsplash_client_t *client = (subsplash_client_t *)clientp;
-	if (client && __atomic_load_n(&client->abort_requested, __ATOMIC_RELAXED))
+	if (client && sched_atomic_load(&client->abort_requested))
 		return 1; /* non-zero aborts the transfer */
 	return 0;
 }
@@ -235,7 +236,7 @@ void subsplash_client_abort(subsplash_client_t *client)
 {
 	if (!client)
 		return;
-	__atomic_store_n(&client->abort_requested, 1, __ATOMIC_RELAXED);
+	sched_atomic_store(&client->abort_requested, 1);
 }
 
 void subsplash_client_destroy(subsplash_client_t *client)
