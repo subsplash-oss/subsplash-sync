@@ -37,8 +37,10 @@ OBS_MODULE_USE_DEFAULT_LOCALE("obs-subsplash-sync", "en-US")
 /* Global state                                                       */
 /* ------------------------------------------------------------------ */
 
+extern "C" {
 scheduler_t g_scheduler;
 bool g_scheduler_enabled = false;
+}
 
 static char g_config_path[512];
 static QTimer *g_action_timer = nullptr;

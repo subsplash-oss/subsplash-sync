@@ -203,7 +203,11 @@ static void *scheduler_thread_func(void *arg)
 		}
 
 		struct timespec ts;
+#if defined(_WIN32)
+		timespec_get(&ts, TIME_UTC);
+#else
 		clock_gettime(CLOCK_REALTIME, &ts);
+#endif
 		ts.tv_sec += wait_sec;
 
 		pthread_mutex_lock(&scheduler->stop_mutex);
