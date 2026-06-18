@@ -80,6 +80,7 @@ bool scheduler_start(scheduler_t *scheduler)
 	scheduler->cached_start_epoch = 0;
 	scheduler->cached_end_epoch = 0;
 	scheduler->consecutive_failures = 0;
+	scheduler->next_poll_epoch = 0;
 
 	if (pthread_create(&scheduler->thread, NULL, scheduler_thread_func, scheduler) != 0) {
 		scheduler->running = false;
@@ -106,6 +107,13 @@ void scheduler_stop(scheduler_t *scheduler)
 
 	pthread_join(scheduler->thread, NULL);
 	scheduler->running = false;
+
+	/* Clear the published next-poll time so a stopped scheduler doesn't
+	 * report a stale countdown. Safe after the join (worker is gone); taken
+	 * under the lock since the UI thread reads it via the accessor. */
+	pthread_mutex_lock(&scheduler->lock);
+	scheduler->next_poll_epoch = 0;
+	pthread_mutex_unlock(&scheduler->lock);
 
 	subsplash_client_destroy(&scheduler->api);
 }
@@ -180,6 +188,14 @@ void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_le
 	pthread_mutex_unlock(&scheduler->lock);
 }
 
+time_t scheduler_get_next_poll_epoch(scheduler_t *scheduler)
+{
+	pthread_mutex_lock(&scheduler->lock);
+	time_t epoch = scheduler->next_poll_epoch;
+	pthread_mutex_unlock(&scheduler->lock);
+	return epoch;
+}
+
 /* ------------------------------------------------------------------ */
 /* Thread entry point                                                 */
 /* ------------------------------------------------------------------ */
@@ -201,6 +217,12 @@ static void *scheduler_thread_func(void *arg)
 			if (backoff_sec > wait_sec)
 				wait_sec = backoff_sec;
 		}
+
+		/* Publish the next-poll time (post-backoff) for the dock's
+		 * "Next refresh" countdown. */
+		pthread_mutex_lock(&scheduler->lock);
+		scheduler->next_poll_epoch = time(NULL) + wait_sec;
+		pthread_mutex_unlock(&scheduler->lock);
 
 		struct timespec ts;
 #if defined(_WIN32)

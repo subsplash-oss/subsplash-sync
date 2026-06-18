@@ -17,10 +17,29 @@
 
 #include <string>
 #include <thread>
+#include <ctime>
 
 #define T(key) obs_module_text(key)
 
 static const char *DEFAULT_BASE_URL = "https://core.subsplash.com";
+
+/* Format the wait until the next automatic refresh as a short countdown,
+ * e.g. "in 2m 34s". Units are kept in code (not localized) to match the
+ * existing C-side time formatting for the Next Broadcast row. */
+static QString FormatNextRefresh(time_t epoch)
+{
+	if (epoch <= 0)
+		return QStringLiteral("soon");
+
+	long secs = (long)(epoch - time(NULL));
+	if (secs <= 0)
+		return QStringLiteral("now");
+	if (secs < 60)
+		return QStringLiteral("in %1s").arg(secs);
+	if (secs < 3600)
+		return QStringLiteral("in %1m %2s").arg(secs / 60).arg(secs % 60, 2, 10, QLatin1Char('0'));
+	return QStringLiteral("in %1h %2m").arg(secs / 3600).arg((secs % 3600) / 60, 2, 10, QLatin1Char('0'));
+}
 
 extern "C" {
 const char *sched_get_config_path(void);
@@ -165,16 +184,29 @@ void SchedulerPanel::SetupUI()
 
 	conn_status_label = new QLabel(T("Status.NotConfigured"), this);
 	/* Error messages (e.g. "Signed in, but not authorized…") run long;
-	 * wrap instead of truncating mid-sentence. */
+	 * wrap instead of truncating mid-sentence. Size to content so a
+	 * single-line value doesn't leave dead space between rows. */
 	conn_status_label->setWordWrap(true);
-	conn_status_label->setMinimumHeight(conn_status_label->fontMetrics().lineSpacing() * 2);
 	sched_status_label = new QLabel(T("Status.Stopped"), this);
 	next_broadcast_label = new QLabel(T("Status.NA"), this);
+	/* Wrap long broadcast strings, but size to content so a single-line
+	 * value doesn't leave a dead row above Next Refresh. */
 	next_broadcast_label->setWordWrap(true);
-	next_broadcast_label->setMinimumHeight(next_broadcast_label->fontMetrics().lineSpacing() * 2);
+	next_refresh_label = new QLabel(T("Status.NA"), this);
 	last_activity_label = new QLabel("", this);
 	last_activity_label->setWordWrap(true);
-	last_activity_label->setMinimumHeight(last_activity_label->fontMetrics().lineSpacing() * 2);
+
+	/* Explain the adaptive cadence so a just-created near-term event isn't a
+	 * surprise; both the caption and value carry it since either may be hovered.
+	 * Wrap in a fixed-width rich-text block so the tooltip word-wraps into a
+	 * readable column instead of rendering as one very wide line. */
+	const QString cadence_tip =
+		QStringLiteral("<table><tr><td width='280'>%1</td></tr></table>").arg(T("Status.NextRefresh.Tooltip"));
+	/* Dimmed info glyph hints that hovering the row reveals an explanation. */
+	auto *next_refresh_caption = new QLabel(
+		QStringLiteral("%1 <span style='color:#8b949e'>\u24D8</span>").arg(T("Status.NextRefresh")), this);
+	next_refresh_caption->setToolTip(cadence_tip);
+	next_refresh_label->setToolTip(cadence_tip);
 
 	status_grid->addWidget(new QLabel(T("Status.Connection"), this), 0, 0, Qt::AlignRight);
 	status_grid->addWidget(conn_status_label, 0, 1);
@@ -183,8 +215,10 @@ void SchedulerPanel::SetupUI()
 	status_grid->addWidget(new QLabel(T("Status.NextBroadcast"), this), 2, 0, Qt::AlignRight | Qt::AlignTop);
 	next_broadcast_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 	status_grid->addWidget(next_broadcast_label, 2, 1, Qt::AlignTop);
-	status_grid->addWidget(new QLabel(T("Status.LastActivity"), this), 3, 0, Qt::AlignRight);
-	status_grid->addWidget(last_activity_label, 3, 1);
+	status_grid->addWidget(next_refresh_caption, 3, 0, Qt::AlignRight);
+	status_grid->addWidget(next_refresh_label, 3, 1);
+	status_grid->addWidget(new QLabel(T("Status.LastActivity"), this), 4, 0, Qt::AlignRight);
+	status_grid->addWidget(last_activity_label, 4, 1);
 	status_group->setLayout(status_grid);
 	main_layout->addWidget(status_group);
 
@@ -587,6 +621,7 @@ void SchedulerPanel::OnStatusTick()
 				     activity_buf, sizeof(activity_buf));
 		next_broadcast_label->setText(next_buf);
 		last_activity_label->setText(activity_buf);
+		next_refresh_label->setText(FormatNextRefresh(scheduler_get_next_poll_epoch(&g_scheduler)));
 
 		/* Reflect the poll thread's real health rather than assuming
 		 * success: streaming when live, the engine's cause-specific error
@@ -620,6 +655,7 @@ void SchedulerPanel::OnStatusTick()
 		sched_status_label->setText(T("Status.Stopped"));
 		SetLabelState(sched_status_label, StatusColor::Grey);
 		next_broadcast_label->setText(T("Status.NA"));
+		next_refresh_label->setText(T("Status.NA"));
 		last_activity_label->setText("");
 	}
 }

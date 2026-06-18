@@ -65,6 +65,7 @@ private:
 	QLabel *conn_status_label;
 	QLabel *sched_status_label;
 	QLabel *next_broadcast_label;
+	QLabel *next_refresh_label;
 	QLabel *last_activity_label;
 	QTimer *status_timer;
 	QTimer *autosave_timer;
