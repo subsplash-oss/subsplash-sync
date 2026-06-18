@@ -58,6 +58,13 @@ typedef struct {
 	/* Retry backoff state for transient API failures. */
 	int consecutive_failures;
 
+	/*
+	 * Absolute (CLOCK_REALTIME) time of the next scheduled automatic
+	 * poll, so the dock can show a "Next refresh" countdown. Set by the
+	 * poll loop before each wait; 0 when not yet computed or stopped.
+	 */
+	time_t next_poll_epoch;
+
 	/* UI-visible status strings. */
 	char status_text[256];
 	char next_broadcast_info[256];
@@ -79,6 +86,7 @@ void scheduler_wake(scheduler_t *scheduler);
 void scheduler_get_status(scheduler_t *scheduler, char *status, size_t status_len, char *next_broadcast,
 			  size_t next_broadcast_len, char *last_activity, size_t last_activity_len);
 int compute_poll_interval(const scheduler_t *scheduler);
+time_t scheduler_get_next_poll_epoch(scheduler_t *scheduler);
 
 #ifdef __cplusplus
 }
