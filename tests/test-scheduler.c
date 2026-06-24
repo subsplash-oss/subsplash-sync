@@ -471,6 +471,72 @@ static void test_poll_no_data_fallback_by_id(void **state)
 	destroy_test_scheduler(&s);
 }
 
+static void test_poll_deleted_broadcast_stops(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/* First poll picks up a broadcast and starts. */
+	make_broadcast(&mock_broadcast, "bc-700", "live", now - 3600, now + 3600, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+	scheduler_poll_once(&s);
+	assert_true(s.acted_started);
+	s.action = SCHED_ACTION_NONE;
+
+	/*
+	 * Broadcast is deleted: it drops from list results and the
+	 * by-id fallback returns NOT_FOUND (HTTP 404). The scheduler
+	 * must STOP promptly rather than wait out the cached end time.
+	 */
+	mock_fetch_result = SUBSPLASH_FETCH_NO_DATA;
+	memset(&mock_broadcast, 0, sizeof(mock_broadcast));
+	mock_by_id_result = SUBSPLASH_FETCH_NOT_FOUND;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+	assert_true(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_deleted_broadcast_not_started_no_stop(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/*
+	 * Track a broadcast scheduled in the future, outside its start
+	 * window, so it is tracked but never started.
+	 */
+	make_broadcast(&mock_broadcast, "bc-701", "scheduled", now + 600, now + 7200, false);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+	scheduler_poll_once(&s);
+	assert_string_equal(s.acted_broadcast_id, "bc-701");
+	assert_false(s.acted_started);
+
+	/*
+	 * The future broadcast is deleted before it ever started. With
+	 * nothing streaming, a 404 must not signal a spurious STOP.
+	 */
+	mock_fetch_result = SUBSPLASH_FETCH_NO_DATA;
+	memset(&mock_broadcast, 0, sizeof(mock_broadcast));
+	mock_by_id_result = SUBSPLASH_FETCH_NOT_FOUND;
+
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	assert_false(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
 /* ================================================================== */
 /* compute_poll_interval tests                                        */
 /* ================================================================== */
@@ -602,6 +668,8 @@ int main(void)
 		cmocka_unit_test(test_poll_simulated_live_skip),
 		cmocka_unit_test(test_poll_terminal_status_stop),
 		cmocka_unit_test(test_poll_no_data_fallback_by_id),
+		cmocka_unit_test(test_poll_deleted_broadcast_stops),
+		cmocka_unit_test(test_poll_deleted_broadcast_not_started_no_stop),
 		/* adaptive poll interval */
 		cmocka_unit_test(test_poll_interval_no_cached_event),
 		cmocka_unit_test(test_poll_interval_event_far_away),
