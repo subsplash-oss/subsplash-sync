@@ -408,6 +408,46 @@ static void test_poll_simulated_live_skip(void **state)
 	assert_int_equal(s.action, SCHED_ACTION_NONE);
 	/* acted_started is still set -- the scheduler tracks it. */
 	assert_true(s.acted_started);
+	/*
+	 * A simulated-live broadcast is marked fully handled (acted_stopped)
+	 * so a later broadcast transition cannot signal a spurious RESTART.
+	 */
+	assert_true(s.acted_stopped);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_simulated_then_transition_no_restart(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+	reset_mocks();
+
+	time_t now = time(NULL);
+
+	/*
+	 * Simulated-live broadcast in its start window: tracked and marked
+	 * handled, but OBS is never started.
+	 */
+	make_broadcast(&mock_broadcast, "bc-410", "live", now - 60, now + 3600, true);
+	mock_fetch_result = SUBSPLASH_FETCH_OK;
+	scheduler_poll_once(&s);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	assert_true(s.acted_started);
+	assert_true(s.acted_stopped);
+
+	/*
+	 * The simulated broadcast ends and a different broadcast appears.
+	 * Because nothing was ever streamed, the transition must NOT signal
+	 * RESTART (which would start OBS). The new broadcast is far in the
+	 * future, so no START fires either.
+	 */
+	make_broadcast(&mock_broadcast, "bc-411", "scheduled", now + 600, now + 7200, false);
+	scheduler_poll_once(&s);
+	assert_int_not_equal(s.action, SCHED_ACTION_RESTART);
+	assert_int_equal(s.action, SCHED_ACTION_NONE);
+	assert_string_equal(s.acted_broadcast_id, "bc-411");
 
 	destroy_test_scheduler(&s);
 }
@@ -666,6 +706,7 @@ int main(void)
 		cmocka_unit_test(test_poll_transition_far_future_stops),
 		cmocka_unit_test(test_poll_broadcast_transition_in_start_window),
 		cmocka_unit_test(test_poll_simulated_live_skip),
+		cmocka_unit_test(test_poll_simulated_then_transition_no_restart),
 		cmocka_unit_test(test_poll_terminal_status_stop),
 		cmocka_unit_test(test_poll_no_data_fallback_by_id),
 		cmocka_unit_test(test_poll_deleted_broadcast_stops),
