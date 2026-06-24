@@ -385,18 +385,46 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 	if (strcmp(scheduler->acted_broadcast_id, broadcast.id) != 0) {
 		/*
 		 * If we started streaming for the previous broadcast but
-		 * never stopped, we owe a clean disconnect so the backend
-		 * closes the old session before we connect for the new
-		 * event.  Return immediately so the RESTART action isn't
-		 * overwritten by a START for the new broadcast in the
-		 * same poll cycle.
+		 * never stopped, the previous broadcast has dropped from the
+		 * results (its end time passed). Only treat this as a
+		 * back-to-back RESTART when the next broadcast is actually
+		 * imminent -- within its own start-lead window. Otherwise the
+		 * previous broadcast simply ended and the next event is in the
+		 * future, so we fire a normal STOP instead of restarting into
+		 * a far-future broadcast.
 		 */
 		if (scheduler->acted_started && !scheduler->acted_stopped) {
-			obs_log(LOG_INFO,
-				"Broadcast transition: %s -> %s, "
-				"signaling RESTART",
-				scheduler->acted_broadcast_id, broadcast.id);
-			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_RESTART);
+			time_t next_trigger_start = broadcast.start_epoch - (scheduler->start_lead_minutes * 60);
+
+			if (now >= next_trigger_start) {
+				/*
+				 * Genuine back-to-back: signal RESTART so the
+				 * backend closes the old session before we connect
+				 * for the new event. Return below so the RESTART
+				 * action isn't overwritten by a START for the new
+				 * broadcast in the same poll cycle.
+				 */
+				obs_log(LOG_INFO,
+					"Broadcast transition: %s -> %s, "
+					"signaling RESTART",
+					scheduler->acted_broadcast_id, broadcast.id);
+				sched_atomic_exchange(&scheduler->action, SCHED_ACTION_RESTART);
+			} else {
+				/*
+				 * Previous broadcast ended; next broadcast is not
+				 * imminent. Stop the ended broadcast instead of
+				 * restarting. We fall through to retrack the new
+				 * broadcast for its future start window -- it is
+				 * outside its start/stop windows, so neither a
+				 * START nor a STOP fires for it this cycle and the
+				 * STOP above is preserved.
+				 */
+				obs_log(LOG_INFO,
+					"Broadcast %s ended; next broadcast %s is not "
+					"imminent, signaling STOP",
+					scheduler->acted_broadcast_id, broadcast.id);
+				sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
+			}
 		}
 
 		scheduler->acted_started = false;
