@@ -522,6 +522,12 @@ int subsplash_client_fetch_by_id(subsplash_client_t *client, const char *id, sub
 		return SUBSPLASH_FETCH_AUTH_ERROR;
 	}
 
+	if (http_code == 404) {
+		obs_log(LOG_INFO, "subsplash: broadcast %s no longer exists (HTTP 404)", id);
+		free(response.data);
+		return SUBSPLASH_FETCH_NOT_FOUND;
+	}
+
 	if (http_code < 200 || http_code >= 300) {
 		obs_log(LOG_WARNING, "subsplash: broadcast %s request returned HTTP %ld", id, http_code);
 		free(response.data);

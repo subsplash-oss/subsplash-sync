@@ -343,6 +343,23 @@ static void test_fetch_by_id_returns_auth_error_on_403(void **state)
 	subsplash_client_destroy(&client);
 }
 
+static void test_fetch_by_id_returns_not_found_on_404(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(404, "{\"code\":\"not_found\"}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_by_id(&client, "deleted-id", &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_NOT_FOUND);
+
+	subsplash_client_destroy(&client);
+}
+
 static void test_test_connection_surfaces_auth_error(void **state)
 {
 	(void)state;
@@ -424,6 +441,7 @@ int main(void)
 		cmocka_unit_test(test_fetch_broadcasts_returns_api_error_on_500),
 		cmocka_unit_test(test_fetch_broadcasts_returns_ok_on_200),
 		cmocka_unit_test(test_fetch_by_id_returns_auth_error_on_403),
+		cmocka_unit_test(test_fetch_by_id_returns_not_found_on_404),
 		cmocka_unit_test(test_test_connection_surfaces_auth_error),
 		/* auth POST body construction */
 		cmocka_unit_test(test_build_token_post_fields_plain),

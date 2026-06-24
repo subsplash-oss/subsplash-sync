@@ -361,12 +361,24 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 						   strcmp(tracked.status, "never-happened") == 0 ||
 						   strcmp(tracked.status, "on-demand") == 0;
 
-				if (is_terminal && !tracked.simulated_live) {
+				if (is_terminal && !tracked.simulated_live && scheduler->acted_started) {
 					obs_log(LOG_INFO, "Signaling STOP: tracked broadcast %s is now %s", tracked.id,
 						tracked.status);
 					sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
 					scheduler->acted_stopped = true;
 				}
+			} else if (by_id_result == SUBSPLASH_FETCH_NOT_FOUND && scheduler->acted_started) {
+				/*
+				 * A definitive 404 means the tracked broadcast was
+				 * deleted in Subsplash. Stop the stream we started
+				 * instead of waiting out the cached end time. This is
+				 * distinct from transient API errors, which stay
+				 * failure-open above.
+				 */
+				obs_log(LOG_INFO, "Signaling STOP: tracked broadcast %s was deleted",
+					scheduler->acted_broadcast_id);
+				sched_atomic_exchange(&scheduler->action, SCHED_ACTION_STOP);
+				scheduler->acted_stopped = true;
 			}
 
 			check_cached_stop(scheduler, time(NULL));
