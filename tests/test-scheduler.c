@@ -320,7 +320,7 @@ static void test_poll_stop_past_end(void **state)
 	destroy_test_scheduler(&s);
 }
 
-static void test_poll_broadcast_transition(void **state)
+static void test_poll_transition_far_future_stops(void **state)
 {
 	(void)state;
 	scheduler_t s;
@@ -338,14 +338,18 @@ static void test_poll_broadcast_transition(void **state)
 	s.action = SCHED_ACTION_NONE;
 
 	/*
-	 * Second broadcast: different ID triggers RESTART.  Put it
-	 * far enough out that it's NOT in the start window yet, so
-	 * only the RESTART action fires in this poll cycle.
+	 * The live broadcast ended and dropped from results; the only
+	 * remaining broadcast is scheduled far in the future, well
+	 * outside its start window.  The ended broadcast must be
+	 * STOPped, not RESTARTed into the future event.
 	 */
 	make_broadcast(&mock_broadcast, "bc-301", "scheduled", now + 600, now + 7200, false);
 
 	scheduler_poll_once(&s);
-	assert_int_equal(s.action, SCHED_ACTION_RESTART);
+	assert_int_equal(s.action, SCHED_ACTION_STOP);
+	/* The future broadcast is now tracked for its eventual start. */
+	assert_string_equal(s.acted_broadcast_id, "bc-301");
+	assert_false(s.acted_started);
 
 	destroy_test_scheduler(&s);
 }
@@ -593,7 +597,7 @@ int main(void)
 		cmocka_unit_test(test_poll_start_in_window),
 		cmocka_unit_test(test_poll_before_start_window),
 		cmocka_unit_test(test_poll_stop_past_end),
-		cmocka_unit_test(test_poll_broadcast_transition),
+		cmocka_unit_test(test_poll_transition_far_future_stops),
 		cmocka_unit_test(test_poll_broadcast_transition_in_start_window),
 		cmocka_unit_test(test_poll_simulated_live_skip),
 		cmocka_unit_test(test_poll_terminal_status_stop),
