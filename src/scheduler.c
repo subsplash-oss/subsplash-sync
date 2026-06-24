@@ -486,6 +486,14 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 	    now < broadcast.end_epoch) {
 		if (broadcast.simulated_live) {
 			obs_log(LOG_INFO, "Skipping START for simulated-live broadcast %s", broadcast.id);
+			/*
+			 * We will never stream a simulated-live broadcast, so mark
+			 * it fully handled. This prevents the broadcast-transition
+			 * path from treating it as an in-progress stream and
+			 * signaling a spurious RESTART (which would start OBS) when
+			 * the next broadcast appears.
+			 */
+			scheduler->acted_stopped = true;
 		} else {
 			sched_atomic_exchange(&scheduler->action, SCHED_ACTION_START);
 			obs_log(LOG_INFO, "Signaling START for broadcast %s", broadcast.id);
