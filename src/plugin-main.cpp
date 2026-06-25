@@ -23,6 +23,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QTimer>
 #include <QMainWindow>
 #include <QByteArray>
+#include <QString>
+#include "credential-store.hpp"
 #include "plugin-support.h"
 #include "scheduler-panel.hpp"
 
@@ -62,6 +64,19 @@ static time_t g_restart_stop_time = 0;
 extern "C" const char *sched_get_config_path(void)
 {
 	return g_config_path;
+}
+
+/* Read one credential from the OS keychain, logging (but not failing) on a hard
+ * error so each key is reported independently. Returns an empty string when the
+ * entry is absent or unreadable. */
+static QString read_credential(const QString &key)
+{
+	QString value, err;
+	cred_store::Read(key, value, &err);
+	if (!err.isEmpty())
+		obs_log(LOG_WARNING, "Keychain read for '%s' failed: %s", key.toUtf8().constData(),
+			err.toUtf8().constData());
+	return value;
 }
 
 /* ------------------------------------------------------------------ */
@@ -218,9 +233,6 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	obs_data_set_default_int(cfg, "start_lead", SCHED_DEFAULT_START_LEAD_MINUTES);
 	obs_data_set_default_int(cfg, "stop_lag", SCHED_DEFAULT_STOP_LAG_MINUTES);
 
-	const char *client_id = obs_data_get_string(cfg, "client_id");
-	const char *client_secret = obs_data_get_string(cfg, "client_secret");
-	const char *app_key = obs_data_get_string(cfg, "app_key");
 	const char *base_url = obs_data_get_string(cfg, "base_url");
 	int start_lead = (int)obs_data_get_int(cfg, "start_lead");
 	int stop_lag = (int)obs_data_get_int(cfg, "stop_lag");
@@ -228,8 +240,16 @@ static void on_frontend_event(enum obs_frontend_event event, void *)
 	if (!base_url || base_url[0] == '\0')
 		base_url = "https://core.subsplash.com";
 
-	if (client_id[0] != '\0' && client_secret[0] != '\0' && app_key[0] != '\0') {
-		scheduler_configure(&g_scheduler, base_url, client_id, client_secret, app_key, start_lead, stop_lag);
+	/* Credentials live in the OS keychain, not config.json. If the keychain is
+	 * unavailable we log (per key) and skip auto-start rather than crash. */
+	QString client_id = read_credential(cred_store::kClientId);
+	QString client_secret = read_credential(cred_store::kClientSecret);
+	QString app_key = read_credential(cred_store::kAppKey);
+
+	if (!client_id.isEmpty() && !client_secret.isEmpty() && !app_key.isEmpty()) {
+		scheduler_configure(&g_scheduler, base_url, client_id.toUtf8().constData(),
+				    client_secret.toUtf8().constData(), app_key.toUtf8().constData(), start_lead,
+				    stop_lag);
 		scheduler_start(&g_scheduler);
 		g_scheduler_enabled = true;
 		obs_log(LOG_INFO, "Auto-started scheduler from saved config");

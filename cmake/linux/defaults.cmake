@@ -18,6 +18,10 @@ set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CM
 
 set(CPACK_GENERATOR "DEB")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+# QtKeychain loads libsecret at runtime via QLibrary (dlopen), so it never
+# appears in the plugin's DT_NEEDED and dpkg-shlibdeps cannot detect it. Declare
+# it explicitly; CPack merges this with the shlibdeps-generated dependencies.
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libsecret-1-0")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${PLUGIN_EMAIL}")
 set(CPACK_SET_DESTDIR ON)
 

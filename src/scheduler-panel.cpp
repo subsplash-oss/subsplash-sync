@@ -1,6 +1,7 @@
 #include "scheduler-panel.hpp"
 
 #include "compat-atomics.h"
+#include "credential-store.hpp"
 #include "plugin-support.h"
 
 #include <QVBoxLayout>
@@ -22,6 +23,32 @@
 #define T(key) obs_module_text(key)
 
 static const char *DEFAULT_BASE_URL = "https://core.subsplash.com";
+
+/* Persist one credential to the OS keychain: write it when present, or remove
+ * the entry when the field has been cleared, so the keychain stays in sync with
+ * the UI. Failures are logged but never abort a save -- non-secret settings
+ * must still persist. */
+static void StoreCredential(const QString &key, const QString &value)
+{
+	QString err;
+	const bool ok = value.isEmpty() ? cred_store::Remove(key, &err) : cred_store::Write(key, value, &err);
+	if (!ok && !err.isEmpty())
+		obs_log(LOG_WARNING, "Keychain %s for '%s' failed: %s", value.isEmpty() ? "delete" : "write",
+			key.toUtf8().constData(), err.toUtf8().constData());
+}
+
+/* Read one credential from the OS keychain, logging (but not failing) on a hard
+ * error so each key is reported independently. Returns an empty string when the
+ * entry is absent or unreadable. */
+static QString ReadCredential(const QString &key)
+{
+	QString value, err;
+	cred_store::Read(key, value, &err);
+	if (!err.isEmpty())
+		obs_log(LOG_WARNING, "Keychain read for '%s' failed: %s", key.toUtf8().constData(),
+			err.toUtf8().constData());
+	return value;
+}
 
 /* Format the wait until the next automatic refresh as a short countdown,
  * e.g. "in 2m 34s". Units are kept in code (not localized) to match the
@@ -388,9 +415,12 @@ void SchedulerPanel::LoadSettings()
 	obs_data_set_default_int(data, "start_lead", SCHED_DEFAULT_START_LEAD_MINUTES);
 	obs_data_set_default_int(data, "stop_lag", SCHED_DEFAULT_STOP_LAG_MINUTES);
 
-	client_id_edit->setText(obs_data_get_string(data, "client_id"));
-	client_secret_edit->setText(obs_data_get_string(data, "client_secret"));
-	app_key_edit->setText(obs_data_get_string(data, "app_key"));
+	/* Credentials come from the OS keychain, not config.json. A locked or
+	 * unavailable keychain leaves a field empty (logged per key in
+	 * ReadCredential); the panel still loads so the user can re-enter them. */
+	client_id_edit->setText(ReadCredential(cred_store::kClientId));
+	client_secret_edit->setText(ReadCredential(cred_store::kClientSecret));
+	app_key_edit->setText(ReadCredential(cred_store::kAppKey));
 	start_lead_spin->setValue((int)obs_data_get_int(data, "start_lead"));
 	stop_lag_spin->setValue((int)obs_data_get_int(data, "stop_lag"));
 
@@ -424,9 +454,11 @@ void SchedulerPanel::SaveSettings()
 	const char *path = sched_get_config_path();
 	obs_data_t *data = obs_data_create();
 
-	obs_data_set_string(data, "client_id", client_id_edit->text().toUtf8().constData());
-	obs_data_set_string(data, "client_secret", client_secret_edit->text().toUtf8().constData());
-	obs_data_set_string(data, "app_key", app_key_edit->text().toUtf8().constData());
+	/* Secrets live in the OS keychain, never in config.json. */
+	StoreCredential(cred_store::kClientId, client_id_edit->text());
+	StoreCredential(cred_store::kClientSecret, client_secret_edit->text());
+	StoreCredential(cred_store::kAppKey, app_key_edit->text());
+
 	obs_data_set_string(data, "base_url", DEFAULT_BASE_URL);
 	obs_data_set_int(data, "start_lead", start_lead_spin->value());
 	obs_data_set_int(data, "stop_lag", stop_lag_spin->value());

@@ -113,6 +113,11 @@ After building, copy the plugin binary to your OBS plugins directory:
 The plugin persists your settings and will auto-start the scheduler when OBS
 launches if it was previously enabled.
 
+Your API credentials (Client ID, Client Secret, and App Key) are stored in the
+OS-native credential store (macOS Keychain, Windows Credential Manager, or Linux
+Secret Service) via QtKeychain — never in plaintext on disk. Non-secret settings
+remain in the plugin's `config.json`.
+
 ## Architecture
 
 | File | Language | Role |
@@ -121,6 +126,7 @@ launches if it was previously enabled.
 | `src/subsplash-api.c/h` | C | libcurl HTTP client for Subsplash auth + broadcast API |
 | `src/scheduler.c/h` | C | Background poll thread with atomic action signaling |
 | `src/scheduler-panel.cpp/hpp` | C++ | Qt dock panel for credentials, settings, and status |
+| `src/credential-store.cpp/hpp` | C++ | Secure credential storage via QtKeychain (OS keychain) |
 | `tests/` | C | Unit tests (CMocka) for scheduler and API logic |
 
 ### Thread Safety
