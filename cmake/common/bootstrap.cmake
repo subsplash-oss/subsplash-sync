@@ -46,13 +46,21 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/common")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/buildspec.json" buildspec)
 
 string(JSON _name GET ${buildspec} name)
+string(JSON _displayName ERROR_VARIABLE _displayName_error GET ${buildspec} displayName)
 string(JSON _website GET ${buildspec} website)
 string(JSON _author GET ${buildspec} author)
 string(JSON _email GET ${buildspec} email)
 string(JSON _version GET ${buildspec} version)
 string(JSON _bundleId GET ${buildspec} platformConfig macos bundleId)
 
+# Fall back to the module name when buildspec.json has no displayName so installer
+# packaging never templates an empty string.
+if(_displayName_error OR _displayName STREQUAL "")
+  set(_displayName ${_name})
+endif()
+
 set(PLUGIN_AUTHOR ${_author})
+set(PLUGIN_DISPLAY_NAME ${_displayName})
 set(PLUGIN_WEBSITE ${_website})
 set(PLUGIN_EMAIL ${_email})
 set(PLUGIN_VERSION ${_version})
