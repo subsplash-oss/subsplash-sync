@@ -1,0 +1,97 @@
+#define MyAppName "@CMAKE_PROJECT_NAME@"
+#define MyAppVersion "@CMAKE_PROJECT_VERSION@"
+#define MyAppPublisher "@PLUGIN_AUTHOR@"
+#define MyAppURL "@PLUGIN_WEBSITE@"
+
+[Setup]
+AppId={{8FA63A6A-2EE9-4D4D-A5C1-DE59BCA4C745}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}
+AppUpdatesURL={#MyAppURL}
+DefaultDirName={code:GetDefaultDir}
+DisableDirPage=no
+Compression=lzma
+SolidCompression=yes
+DirExistsWarning=no
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Files]
+Source: "..\release\Package\{#MyAppName}\bin\64bit\*.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
+Source: "..\release\Package\{#MyAppName}\bin\64bit\*.pdb"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\release\Package\{#MyAppName}\data\*"; DestDir: "{app}\data\obs-plugins\{#MyAppName}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[UninstallDelete]
+Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppName}.dll"
+Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppName}.pdb"
+Type: filesandordirs; Name: "{app}\data\obs-plugins\{#MyAppName}"
+
+[Code]
+function ParseUninstallDir(const UninstallStr: String): String;
+var
+  ExePath: String;
+  SlashPos: Integer;
+  I: Integer;
+begin
+  Result := '';
+  ExePath := UninstallStr;
+  if (Length(ExePath) > 0) and (ExePath[1] = '"') then
+  begin
+    Delete(ExePath, 1, 1);
+    I := Pos('"', ExePath);
+    if I > 0 then
+      ExePath := Copy(ExePath, 1, I - 1);
+  end;
+  SlashPos := 0;
+  for I := Length(ExePath) downto 1 do
+  begin
+    if ExePath[I] = '\' then
+    begin
+      SlashPos := I;
+      Break;
+    end;
+  end;
+  if SlashPos > 0 then
+    Result := Copy(ExePath, 1, SlashPos - 1);
+end;
+
+function GetDefaultDir(Param: String): String;
+var
+  InstallPath: String;
+  UninstallStr: String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKLM64, 'SOFTWARE\OBS Studio', '', InstallPath) then
+    Result := InstallPath
+  else if RegQueryStringValue(HKLM32, 'SOFTWARE\OBS Studio', '', InstallPath) then
+    Result := InstallPath;
+
+  if Result = '' then
+  begin
+    if RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio',
+       'UninstallString', UninstallStr) then
+      Result := ParseUninstallDir(UninstallStr);
+  end;
+
+  if Result = '' then
+    Result := ExpandConstant('{autopf}\obs-studio');
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
+  begin
+    if not DirExists(ExpandConstant('{app}\obs-plugins')) then
+    begin
+      if MsgBox('OBS Studio does not appear to be installed in that folder '
+        + '(obs-plugins directory not found).' + #13#10#13#10
+        + 'Continue anyway?', mbConfirmation, MB_YESNO) = IDNO then
+        Result := False;
+    end;
+  end;
+end;

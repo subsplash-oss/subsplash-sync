@@ -80,6 +80,10 @@ target_sources(
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
+if(WIN32)
+  configure_file(installer.iss.in installer.iss)
+endif()
+
 option(ENABLE_TESTS "Build unit tests" OFF)
 if(ENABLE_TESTS)
   enable_testing()

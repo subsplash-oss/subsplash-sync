@@ -283,12 +283,45 @@ jobs:
           target: x64
           config: ${{ needs.check-event.outputs.config }}
 
+      - name: Azure Login 🔐
+        if: fromJSON(needs.check-event.outputs.codesign)
+        uses: azure/login@v3
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Sign Plugin DLL 🔏
+        if: fromJSON(needs.check-event.outputs.codesign)
+        uses: azure/trusted-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: subsplash-signing
+          certificate-profile-name: subsplash-sync-profile
+          files-folder: ${{ github.workspace }}/release/${{ needs.check-event.outputs.config }}
+          files-folder-filter: dll
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
         with:
           target: x64
           config: ${{ needs.check-event.outputs.config }}
           package: ${{ fromJSON(needs.check-event.outputs.package) }}
+
+      - name: Sign Installer 🔏
+        if: fromJSON(needs.check-event.outputs.codesign) && fromJSON(needs.check-event.outputs.package)
+        uses: azure/trusted-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: subsplash-signing
+          certificate-profile-name: subsplash-sync-profile
+          files-folder: ${{ github.workspace }}/release
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Upload Artifacts 📡
         uses: actions/upload-artifact@v4

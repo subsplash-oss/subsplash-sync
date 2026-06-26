@@ -53,6 +53,7 @@ function Package {
         ErrorAction = 'SilentlyContinue'
         Path = @(
             "${ProjectRoot}/release/${ProductName}-*-windows-*.zip"
+            "${ProjectRoot}/release/${ProductName}-*-windows-*.exe"
         )
     }
 
@@ -67,6 +68,25 @@ function Package {
     }
     Compress-Archive -Force @CompressArgs
     Log-Group
+
+    $IsccFile = "${ProjectRoot}/build_${Target}/installer.iss"
+
+    if ( Test-Path -Path $IsccFile ) {
+        Log-Group "Creating InnoSetup installer..."
+
+        Push-Location -Stack BuildTemp
+        Ensure-Location -Path "${ProjectRoot}/release"
+
+        Remove-Item -Path Package -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path ${Configuration} -Destination Package -Recurse
+
+        Invoke-External iscc ${IsccFile} /O"${ProjectRoot}/release" /F"${OutputName}-Installer"
+
+        Remove-Item -Path Package -Recurse
+
+        Pop-Location -Stack BuildTemp
+        Log-Group
+    }
 }
 
 Package
