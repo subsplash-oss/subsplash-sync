@@ -1,4 +1,5 @@
-#define MyAppName "@CMAKE_PROJECT_NAME@"
+#define MyAppName "@PLUGIN_DISPLAY_NAME@"
+#define MyAppModule "@CMAKE_PROJECT_NAME@"
 #define MyAppVersion "@CMAKE_PROJECT_VERSION@"
 #define MyAppPublisher "@PLUGIN_AUTHOR@"
 #define MyAppURL "@PLUGIN_WEBSITE@"
@@ -21,14 +22,14 @@ DirExistsWarning=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\release\Package\{#MyAppName}\bin\64bit\*.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
-Source: "..\release\Package\{#MyAppName}\bin\64bit\*.pdb"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\release\Package\{#MyAppName}\data\*"; DestDir: "{app}\data\obs-plugins\{#MyAppName}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\Package\{#MyAppModule}\bin\64bit\*.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
+Source: "..\release\Package\{#MyAppModule}\bin\64bit\*.pdb"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\release\Package\{#MyAppModule}\data\*"; DestDir: "{app}\data\obs-plugins\{#MyAppModule}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [UninstallDelete]
-Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppName}.dll"
-Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppName}.pdb"
-Type: filesandordirs; Name: "{app}\data\obs-plugins\{#MyAppName}"
+Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppModule}.dll"
+Type: files; Name: "{app}\obs-plugins\64bit\{#MyAppModule}.pdb"
+Type: filesandordirs; Name: "{app}\data\obs-plugins\{#MyAppModule}"
 
 [Code]
 function ParseUninstallDir(const UninstallStr: String): String;
