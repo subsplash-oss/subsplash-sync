@@ -28,8 +28,8 @@ extern "C" {
 
 /*
  * Delay between stop and start during a broadcast transition.
- * Must exceed the backend's restart delay (20s for RTMP) so the
- * old session is fully ended before the new connection is made.
+ * Must exceed 20s so the old session is fully ended before the
+ * new connection is made.
  */
 #define SCHED_RESTART_DELAY_SEC 30
 

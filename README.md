@@ -101,8 +101,7 @@ After building, copy the plugin binary to your OBS plugins directory:
 3. Enter your Subsplash API credentials:
    - **Client ID** and **Client Secret** from your API Client
    - **App Key** (6-character code for your organization)
-   - **Base URL** (`https://core.subsplash.com` for production,
-     `https://core.subsplash.com` for staging)
+   - **Base URL** (`https://core.subsplash.com`)
 4. Click **Test Connection** to verify credentials and see upcoming broadcasts.
 5. Adjust schedule settings:
    - **Poll Interval**: How often to check for broadcasts (default: 30 sec)
