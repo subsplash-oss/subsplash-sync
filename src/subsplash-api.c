@@ -342,7 +342,7 @@ bool subsplash_client_authenticate(subsplash_client_t *client)
 /* ------------------------------------------------------------------ */
 /* subsplash_client_fetch_broadcasts                                  */
 /*                                                                    */
-/* Queries upcoming broadcasts via the upcoming filter.        */
+/* Queries upcoming broadcasts via the upcoming filter.               */
 /* Terminal statuses (ended, on-demand, never-happened) are skipped   */
 /* so a just-finished broadcast doesn't shadow the next scheduled     */
 /* event.                                                             */
@@ -365,10 +365,7 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 
 	char *encoded_app_key = curl_easy_escape(escape_handle, client->app_key, 0);
 
-	/*
-	 * The upcoming filter hits a cached code path in server,
-	 * avoiding a round-trip to the upstream API on most polls.
-	 */
+	/* The upcoming filter is optimised server-side for frequent polling. */
 	char url[SUBSPLASH_MAX_URL + 512];
 	snprintf(url, sizeof(url),
 		 "%s/live/v1/broadcasts?"

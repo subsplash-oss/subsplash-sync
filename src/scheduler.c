@@ -411,10 +411,10 @@ static void scheduler_poll_once(scheduler_t *scheduler)
 			if (now >= next_trigger_start) {
 				/*
 				 * Genuine back-to-back: signal RESTART so the
-				 * backend closes the old session before we connect
-				 * for the new event. Return below so the RESTART
-				 * action isn't overwritten by a START for the new
-				 * broadcast in the same poll cycle.
+				 * old session is closed before we connect for
+				 * the new event. Return below so the RESTART
+				 * action isn't overwritten by a START for the
+				 * new broadcast in the same poll cycle.
 				 */
 				obs_log(LOG_INFO,
 					"Broadcast transition: %s -> %s, "
