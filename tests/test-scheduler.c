@@ -679,6 +679,125 @@ static void test_poll_interval_clamp_to_exact(void **state)
 	destroy_test_scheduler(&s);
 }
 
+static void test_poll_interval_pending_stop_after_list_drop(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/*
+	 * Broadcast ended and dropped from the upcoming list, so
+	 * cached_start_epoch was cleared to 0. A stop is still pending
+	 * (started, not stopped) with stop lag = 2 min and the end 30s ago,
+	 * so the stop trigger is ~90s out. Without the fix the interval would
+	 * idle at 300s and the stop would fire ~5 min late; it must instead
+	 * clamp to the ~90s remaining until end + lag.
+	 */
+	s.stop_lag_minutes = 2;
+	s.acted_started = true;
+	s.acted_stopped = false;
+	s.cached_start_epoch = 0;
+	s.cached_end_epoch = time(NULL) - 30;
+
+	int interval = compute_poll_interval(&s);
+	assert_true(interval >= 85 && interval <= 95);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_pending_stop_clamps_start_interval(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/*
+	 * Broadcast still listed and live: cached_start_epoch is set and the
+	 * start trigger has passed, so the start-based interval would be the
+	 * 30s minimum. The stop trigger is only 10s out, so the pending-stop
+	 * clamp must pull the interval down to ~10s so the loop wakes exactly
+	 * at end + lag.
+	 */
+	s.stop_lag_minutes = 0;
+	s.acted_started = true;
+	s.acted_stopped = false;
+	s.cached_start_epoch = time(NULL) - 3600;
+	s.cached_end_epoch = time(NULL) + 10;
+
+	int interval = compute_poll_interval(&s);
+	assert_true(interval >= 8 && interval <= 12);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_pending_stop_past_due(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/*
+	 * Stop trigger already passed (e.g. the machine was suspended) with
+	 * the broadcast dropped from the list. The interval must not idle at
+	 * 300s; it should poll promptly (<= 30s) to fire the pending stop.
+	 */
+	s.stop_lag_minutes = 2;
+	s.acted_started = true;
+	s.acted_stopped = false;
+	s.cached_start_epoch = 0;
+	s.cached_end_epoch = time(NULL) - 600;
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_MIN_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_not_started_ignores_end(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/*
+	 * A cached end time with nothing streaming (not started) must not
+	 * influence the interval -- only pending stops matter. With no start
+	 * cached, the interval stays idle.
+	 */
+	s.stop_lag_minutes = 2;
+	s.acted_started = false;
+	s.acted_stopped = false;
+	s.cached_start_epoch = 0;
+	s.cached_end_epoch = time(NULL) + 10;
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_IDLE_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
+static void test_poll_interval_already_stopped_ignores_end(void **state)
+{
+	(void)state;
+	scheduler_t s;
+	init_test_scheduler(&s);
+
+	/*
+	 * Once the stop has already fired, a cached end must not keep the
+	 * loop polling tightly -- it returns to the idle interval.
+	 */
+	s.stop_lag_minutes = 2;
+	s.acted_started = true;
+	s.acted_stopped = true;
+	s.cached_start_epoch = 0;
+	s.cached_end_epoch = time(NULL) + 10;
+
+	int interval = compute_poll_interval(&s);
+	assert_int_equal(interval, SCHED_POLL_IDLE_SEC);
+
+	destroy_test_scheduler(&s);
+}
+
 /* ================================================================== */
 /* main                                                               */
 /* ================================================================== */
@@ -718,6 +837,11 @@ int main(void)
 		cmocka_unit_test(test_poll_interval_event_imminent),
 		cmocka_unit_test(test_poll_interval_event_past_trigger),
 		cmocka_unit_test(test_poll_interval_clamp_to_exact),
+		cmocka_unit_test(test_poll_interval_pending_stop_after_list_drop),
+		cmocka_unit_test(test_poll_interval_pending_stop_clamps_start_interval),
+		cmocka_unit_test(test_poll_interval_pending_stop_past_due),
+		cmocka_unit_test(test_poll_interval_not_started_ignores_end),
+		cmocka_unit_test(test_poll_interval_already_stopped_ignores_end),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);
