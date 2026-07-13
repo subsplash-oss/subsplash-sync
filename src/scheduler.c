@@ -146,31 +146,57 @@ void scheduler_wake(scheduler_t *scheduler)
 
 int compute_poll_interval(const scheduler_t *scheduler)
 {
-	if (scheduler->cached_start_epoch <= 0)
-		return SCHED_POLL_IDLE_SEC;
-
 	time_t now = time(NULL);
-	time_t trigger = scheduler->cached_start_epoch - (scheduler->start_lead_minutes * 60);
-	long secs_to_event = (long)(trigger - now);
+	int interval;
 
-	if (secs_to_event <= 0)
-		return SCHED_POLL_MIN_SEC;
-
-	int interval = (int)(secs_to_event / 10);
-
-	if (interval < SCHED_POLL_MIN_SEC)
-		interval = SCHED_POLL_MIN_SEC;
-	if (interval > SCHED_POLL_IDLE_SEC)
+	if (scheduler->cached_start_epoch <= 0) {
 		interval = SCHED_POLL_IDLE_SEC;
+	} else {
+		time_t trigger = scheduler->cached_start_epoch - (scheduler->start_lead_minutes * 60);
+		long secs_to_event = (long)(trigger - now);
 
-	/* Jitter: add 0-25% to spread synchronized polls across
-	 * customers whose broadcasts start at the same time. */
-	int jitter = rand() % (interval / 4 + 1);
-	interval += jitter;
+		if (secs_to_event <= 0) {
+			interval = SCHED_POLL_MIN_SEC;
+		} else {
+			interval = (int)(secs_to_event / 10);
 
-	/* Wake exactly at the trigger point instead of overshooting. */
-	if (secs_to_event < interval)
-		interval = (int)secs_to_event;
+			if (interval < SCHED_POLL_MIN_SEC)
+				interval = SCHED_POLL_MIN_SEC;
+			if (interval > SCHED_POLL_IDLE_SEC)
+				interval = SCHED_POLL_IDLE_SEC;
+
+			/* Jitter: add 0-25% to spread synchronized polls across
+			 * customers whose broadcasts start at the same time. */
+			int jitter = rand() % (interval / 4 + 1);
+			interval += jitter;
+
+			/* Wake exactly at the trigger point instead of overshooting. */
+			if (secs_to_event < interval)
+				interval = (int)secs_to_event;
+		}
+	}
+
+	/*
+	 * If we started a stream that hasn't stopped yet, make sure we wake
+	 * in time to fire the STOP at end + stop lag. Once a broadcast ends it
+	 * drops from the upcoming list, which clears cached_start_epoch and
+	 * would otherwise idle the poll loop at 5-minute intervals -- delaying
+	 * the stop well past end + lag. Clamp the wait so the loop wakes
+	 * exactly at the stop trigger regardless of the start-based interval
+	 * above.
+	 */
+	if (scheduler->acted_started && !scheduler->acted_stopped && scheduler->cached_end_epoch > 0) {
+		time_t trigger_stop = scheduler->cached_end_epoch + (scheduler->stop_lag_minutes * 60);
+		long secs_to_stop = (long)(trigger_stop - now);
+
+		if (secs_to_stop <= 0) {
+			/* Past due: poll promptly to fire the pending stop. */
+			if (interval > SCHED_POLL_MIN_SEC)
+				interval = SCHED_POLL_MIN_SEC;
+		} else if (secs_to_stop < interval) {
+			interval = (int)secs_to_stop;
+		}
+	}
 
 	return interval;
 }
