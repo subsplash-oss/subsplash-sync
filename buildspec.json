@@ -38,7 +38,7 @@
     },
     "name": "obs-subsplash-sync",
     "displayName": "Subsplash Sync",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "author": "Subsplash",
     "website": "https://www.subsplash.com",
     "email": "api@subsplash.com"
