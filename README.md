@@ -36,7 +36,7 @@ starts and stops.
 - OBS Studio 31+
 - A Subsplash Live account
 - A Subsplash API Client (client_id / client_secret)
-- OBS Stream settings configured with your Subsplash RTMP ingest URL and stream key
+- OBS Stream settings configured with your Subsplash streaming URL and stream key
 
 ## Installing
 
