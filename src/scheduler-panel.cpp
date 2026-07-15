@@ -99,6 +99,12 @@ SchedulerPanel::SchedulerPanel(QWidget *parent) : QWidget(parent)
 
 	LoadSettings();
 	status_timer->start();
+
+	/* Paint the initial status immediately instead of waiting up to a full
+	 * tick (~1s). When the scheduler auto-started before this panel was built,
+	 * LoadSettings() skips the connection probe, so without this the Connection
+	 * label would linger on its "Not configured" default until the first tick. */
+	OnStatusTick();
 }
 
 SchedulerPanel::~SchedulerPanel()
@@ -426,7 +432,14 @@ void SchedulerPanel::LoadSettings()
 
 	obs_data_release(data);
 
+	/* Block signals: with the scheduler auto-started before this panel is
+	 * built, this setChecked() actually flips the box (running == true) and
+	 * would fire OnEnableToggled() -- re-configuring/re-initializing the live
+	 * scheduler's client and re-saving settings on every launch. Match the
+	 * OnStatusTick pattern and update the button state silently. */
+	enable_btn->blockSignals(true);
 	enable_btn->setChecked(g_scheduler_enabled && g_scheduler.running);
+	enable_btn->blockSignals(false);
 	enable_btn->setText(enable_btn->isChecked() ? T("Buttons.Disable") : T("Buttons.Enable"));
 	refresh_btn->setEnabled(enable_btn->isChecked());
 
