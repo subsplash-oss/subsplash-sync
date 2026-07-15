@@ -97,7 +97,7 @@ scheduled → live → ended → on-demand
 The plugin starts streaming when a broadcast is `scheduled` and its start time
 arrives. It stops streaming when the `end_at` time passes.
 
-The background scheduler distinguishes normal broadcasts from simulated-live. Simulated-live broadcasts and will **not** trigger automatic streaming.
+The background scheduler distinguishes normal broadcasts from simulated-live. Simulated-live broadcasts will **not** trigger automatic streaming.
 
 ## Limitations and known issues
 
