@@ -46,7 +46,7 @@ starts and stops.
 - Run it on your machine and follow the installer steps
 - If OBS is already running, restart it so it can detect the plugin
 
-### Mac OS
+### macOS
 
 - Download `obs-subsplash-sync-x.y.z-macos-universal.pkg` from the Releases page
 - Run it on your machine and follow the installer steps
@@ -55,7 +55,7 @@ starts and stops.
 ### Linux (Ubuntu, Debian)
 
 - Download `obs-subsplash-sync-x.y.z-x86_64-linux-gnu.deb` from the Releases page
-- Run it on your machine and follow the installer steps
+- Run `sudo apt install {filename}` where filename is the downloaded .deb
 - If OBS is already running, restart it so it can detect the plugin
 
 ### Linux (other)
@@ -97,7 +97,7 @@ scheduled → live → ended → on-demand
 The plugin starts streaming when a broadcast is `scheduled` and its start time
 arrives. It stops streaming when the `end_at` time passes.
 
-Simulated-live broadcasts are do **not** trigger streaming, only true live broadcasts.
+The background scheduler distinguishes normal broadcasts from simulated-live. Simulated-live broadcasts and will **not** trigger automatic streaming.
 
 ## Limitations and known issues
 
@@ -118,7 +118,7 @@ cmake --preset windows-x64
 cmake --build --preset windows-x64
 ```
 
-### Mac OS
+### macOS
 
 ```bash
 cmake --preset macos
