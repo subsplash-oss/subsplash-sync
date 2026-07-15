@@ -633,18 +633,28 @@ void SchedulerPanel::OnRefresh()
 void SchedulerPanel::OnEnableToggled()
 {
 	if (enable_btn->isChecked()) {
-		g_scheduler_enabled = true;
-
 		scheduler_configure(&g_scheduler, DEFAULT_BASE_URL, client_id_edit->text().toUtf8().constData(),
 				    client_secret_edit->text().toUtf8().constData(),
 				    app_key_edit->text().toUtf8().constData(), start_lead_spin->value(),
 				    stop_lag_spin->value());
 
-		scheduler_start(&g_scheduler);
-		SaveSettings();
-		enable_btn->setText(T("Buttons.Disable"));
-		refresh_btn->setEnabled(true);
-		obs_log(LOG_INFO, "Scheduler enabled");
+		if (scheduler_start(&g_scheduler)) {
+			g_scheduler_enabled = true;
+			SaveSettings();
+			enable_btn->setText(T("Buttons.Disable"));
+			refresh_btn->setEnabled(true);
+			obs_log(LOG_INFO, "Scheduler enabled");
+		} else {
+			/* Start failed (e.g. worker thread spawn failed): revert the
+			 * toggle so the UI doesn't claim to be enabled. Block signals
+			 * so unchecking doesn't re-enter this handler. */
+			obs_log(LOG_ERROR, "Failed to start scheduler");
+			enable_btn->blockSignals(true);
+			enable_btn->setChecked(false);
+			enable_btn->blockSignals(false);
+			enable_btn->setText(T("Buttons.Enable"));
+			refresh_btn->setEnabled(false);
+		}
 	} else {
 		scheduler_stop(&g_scheduler);
 		g_scheduler_enabled = false;
@@ -701,6 +711,11 @@ void SchedulerPanel::OnStatusTick()
 				cause = T("Status.ApiError");
 			conn_status_label->setText(cause);
 			SetLabelState(conn_status_label, StatusColor::Red);
+		} else if (!sched_atomic_load(&g_scheduler.first_poll_done)) {
+			/* Running but the first poll hasn't returned yet -- don't
+			 * claim "Connected" before connectivity is confirmed. */
+			conn_status_label->setText(T("Status.Checking"));
+			SetLabelState(conn_status_label, StatusColor::Amber);
 		} else {
 			conn_status_label->setText(T("Status.Connected"));
 			SetLabelState(conn_status_label, StatusColor::Green);

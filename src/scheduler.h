@@ -59,6 +59,15 @@ typedef struct {
 	int consecutive_failures;
 
 	/*
+	 * Set once the initial poll completes so the UI can distinguish a
+	 * not-yet-confirmed "connecting" state from a genuinely connected one
+	 * (consecutive_failures == 0 is true both before the first poll and
+	 * after a successful one). Reset on each start. Accessed atomically as
+	 * it's written by the poll thread and read by the UI thread.
+	 */
+	volatile long first_poll_done;
+
+	/*
 	 * Absolute (CLOCK_REALTIME) time of the next scheduled automatic
 	 * poll, so the dock can show a "Next refresh" countdown. Set by the
 	 * poll loop before each wait; 0 when not yet computed or stopped.
