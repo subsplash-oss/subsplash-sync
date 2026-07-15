@@ -99,6 +99,12 @@ SchedulerPanel::SchedulerPanel(QWidget *parent) : QWidget(parent)
 
 	LoadSettings();
 	status_timer->start();
+
+	/* Paint the initial status immediately instead of waiting up to a full
+	 * tick (~1s). When the scheduler auto-started before this panel was built,
+	 * LoadSettings() skips the connection probe, so without this the Connection
+	 * label would linger on its "Not configured" default until the first tick. */
+	OnStatusTick();
 }
 
 SchedulerPanel::~SchedulerPanel()
