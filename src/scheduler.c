@@ -81,6 +81,7 @@ bool scheduler_start(scheduler_t *scheduler)
 	scheduler->cached_end_epoch = 0;
 	scheduler->consecutive_failures = 0;
 	scheduler->next_poll_epoch = 0;
+	scheduler->first_poll_done = 0;
 
 	if (pthread_create(&scheduler->thread, NULL, scheduler_thread_func, scheduler) != 0) {
 		scheduler->running = false;
@@ -234,6 +235,10 @@ static void *scheduler_thread_func(void *arg)
 
 	/* Poll immediately on startup for crash recovery. */
 	scheduler_poll_once(scheduler);
+
+	/* First poll finished: the UI can now show a confirmed connection state
+	 * (or the poll's error) instead of a pending "connecting" one. */
+	sched_atomic_store(&scheduler->first_poll_done, 1);
 
 	while (!scheduler->stop_requested) {
 		int wait_sec = compute_poll_interval(scheduler);

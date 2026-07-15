@@ -218,9 +218,12 @@ static void autostart_scheduler_if_enabled(void)
 		scheduler_configure(&g_scheduler, base_url, client_id.toUtf8().constData(),
 				    client_secret.toUtf8().constData(), app_key.toUtf8().constData(), start_lead,
 				    stop_lag);
-		scheduler_start(&g_scheduler);
-		g_scheduler_enabled = true;
-		obs_log(LOG_INFO, "Auto-started scheduler from saved config");
+		if (scheduler_start(&g_scheduler)) {
+			g_scheduler_enabled = true;
+			obs_log(LOG_INFO, "Auto-started scheduler from saved config");
+		} else {
+			obs_log(LOG_ERROR, "Failed to auto-start scheduler from saved config");
+		}
 	}
 
 	obs_data_release(cfg);
