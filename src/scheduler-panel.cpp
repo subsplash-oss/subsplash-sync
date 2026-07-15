@@ -426,7 +426,14 @@ void SchedulerPanel::LoadSettings()
 
 	obs_data_release(data);
 
+	/* Block signals: with the scheduler auto-started before this panel is
+	 * built, this setChecked() actually flips the box (running == true) and
+	 * would fire OnEnableToggled() -- re-configuring/re-initializing the live
+	 * scheduler's client and re-saving settings on every launch. Match the
+	 * OnStatusTick pattern and update the button state silently. */
+	enable_btn->blockSignals(true);
 	enable_btn->setChecked(g_scheduler_enabled && g_scheduler.running);
+	enable_btn->blockSignals(false);
 	enable_btn->setText(enable_btn->isChecked() ? T("Buttons.Disable") : T("Buttons.Enable"));
 	refresh_btn->setEnabled(enable_btn->isChecked());
 
