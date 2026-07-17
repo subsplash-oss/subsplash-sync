@@ -365,13 +365,18 @@ int subsplash_client_fetch_broadcasts(subsplash_client_t *client, subsplash_broa
 
 	char *encoded_app_key = curl_easy_escape(escape_handle, client->app_key, 0);
 
-	/* The upcoming filter is optimised server-side for frequent polling. */
+	/*
+	 * The upcoming filter is optimised server-side for frequent polling.
+	 * Request several results so the terminal-skip loop below can reach the
+	 * next actionable broadcast even when a just-finished one is still
+	 * returned in the upcoming window (a single result would hide it).
+	 */
 	char url[SUBSPLASH_MAX_URL + 512];
 	snprintf(url, sizeof(url),
 		 "%s/live/v1/broadcasts?"
 		 "filter%%5Bapp_key%%5D=%s&"
 		 "filter%%5Bupcoming%%5D=true&"
-		 "page%%5Bsize%%5D=1",
+		 "page%%5Bsize%%5D=5",
 		 client->base_url, encoded_app_key ? encoded_app_key : client->app_key);
 
 	curl_free(encoded_app_key);
