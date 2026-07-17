@@ -326,6 +326,64 @@ static void test_fetch_broadcasts_returns_ok_on_200(void **state)
 	subsplash_client_destroy(&client);
 }
 
+/*
+ * Regression (MED-12703): a just-ended broadcast can still be returned in
+ * the upcoming window as the first result. The terminal-skip loop must look
+ * past it and pick the next scheduled broadcast, rather than reporting no
+ * data. This regressed when page[size] was reduced to 1, which left the
+ * skip loop no room to reach the second result.
+ */
+static void test_fetch_broadcasts_skips_terminal_first_result(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(200, "{\"_embedded\":{\"broadcasts\":["
+				   "{\"id\":\"ended-1\",\"start_at\":\"2026-06-08T09:00:00Z\","
+				   "\"end_at\":\"2026-06-08T10:00:00Z\",\"status\":\"ended\","
+				   "\"simulated_live\":false},"
+				   "{\"id\":\"next-1\",\"start_at\":\"2026-06-08T11:00:00Z\","
+				   "\"end_at\":\"2026-06-08T12:00:00Z\",\"status\":\"scheduled\","
+				   "\"simulated_live\":false}"
+				   "]}}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_OK);
+	assert_true(b.valid);
+	assert_string_equal(b.id, "next-1");
+	assert_string_equal(b.status, "scheduled");
+
+	subsplash_client_destroy(&client);
+}
+
+static void test_fetch_broadcasts_all_terminal_returns_no_data(void **state)
+{
+	(void)state;
+	stub_reset();
+	stub_enqueue_response(200, fake_token_json);
+	stub_enqueue_response(200, "{\"_embedded\":{\"broadcasts\":["
+				   "{\"id\":\"ended-1\",\"start_at\":\"2026-06-08T09:00:00Z\","
+				   "\"end_at\":\"2026-06-08T10:00:00Z\",\"status\":\"ended\","
+				   "\"simulated_live\":false},"
+				   "{\"id\":\"vod-1\",\"start_at\":\"2026-06-08T08:00:00Z\","
+				   "\"end_at\":\"2026-06-08T08:30:00Z\",\"status\":\"on-demand\","
+				   "\"simulated_live\":false}"
+				   "]}}");
+
+	subsplash_client_t client;
+	init_client(&client);
+
+	subsplash_broadcast_t b;
+	int result = subsplash_client_fetch_broadcasts(&client, &b);
+	assert_int_equal(result, SUBSPLASH_FETCH_NO_DATA);
+
+	subsplash_client_destroy(&client);
+}
+
 static void test_fetch_by_id_returns_auth_error_on_403(void **state)
 {
 	(void)state;
@@ -440,6 +498,8 @@ int main(void)
 		cmocka_unit_test(test_fetch_broadcasts_returns_auth_error_on_403),
 		cmocka_unit_test(test_fetch_broadcasts_returns_api_error_on_500),
 		cmocka_unit_test(test_fetch_broadcasts_returns_ok_on_200),
+		cmocka_unit_test(test_fetch_broadcasts_skips_terminal_first_result),
+		cmocka_unit_test(test_fetch_broadcasts_all_terminal_returns_no_data),
 		cmocka_unit_test(test_fetch_by_id_returns_auth_error_on_403),
 		cmocka_unit_test(test_fetch_by_id_returns_not_found_on_404),
 		cmocka_unit_test(test_test_connection_surfaces_auth_error),
